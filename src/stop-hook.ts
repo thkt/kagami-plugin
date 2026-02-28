@@ -6,6 +6,7 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { sendPayload } from "./api";
 import { parseTranscript } from "./parser";
 
 const execFileAsync = promisify(execFile);
@@ -61,22 +62,7 @@ async function main() {
 
   // API に POST (fire-and-forget, タイムアウト 8s)
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
-    if (API_KEY) headers.Authorization = `Bearer ${API_KEY}`;
-
-    await fetch(`${API_URL}/api/events`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
+    await sendPayload(API_URL, API_KEY, payload, 8000);
   } catch {
     // ネットワークエラーは無視 (NFR-005: ブロックしない)
   }

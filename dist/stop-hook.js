@@ -2,6 +2,21 @@
 import { execFile as execFile2 } from "node:child_process";
 import { promisify as promisify2 } from "node:util";
 
+// src/api.ts
+function sendPayload(apiUrl, apiKey, payload, timeoutMs) {
+  const headers = {
+    "Content-Type": "application/json"
+  };
+  if (apiKey)
+    headers.Authorization = `Bearer ${apiKey}`;
+  return fetch(`${apiUrl}/api/events`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined
+  });
+}
+
 // src/parser.ts
 import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
@@ -230,20 +245,7 @@ async function main() {
     payload.ccVersion = "unknown";
   }
   try {
-    const controller = new AbortController;
-    const timeout = setTimeout(() => controller.abort(), 8000);
-    const headers = {
-      "Content-Type": "application/json"
-    };
-    if (API_KEY)
-      headers.Authorization = `Bearer ${API_KEY}`;
-    await fetch(`${API_URL}/api/events`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
-    clearTimeout(timeout);
+    await sendPayload(API_URL, API_KEY, payload, 8000);
   } catch {}
 }
 main();
