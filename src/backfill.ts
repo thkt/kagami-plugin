@@ -4,17 +4,17 @@
  * 指定ディレクトリ配下の過去 JSONL を一括解析して API に POST する。
  *
  * Usage:
- *   bun run src/backfill.ts [directory]
- *   bun run src/backfill.ts              # default: ~/.claude/projects/
- *   bun run src/backfill.ts --dry-run    # 解析のみ、送信しない
+ *   npx tsx src/backfill.ts [directory]
+ *   npx tsx src/backfill.ts              # default: ~/.claude/projects/
+ *   npx tsx src/backfill.ts --dry-run    # 解析のみ、送信しない
  */
 import { readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseTranscript } from "./parser";
 
-const API_URL = Bun.env.KAGAMI_API_URL;
-const API_KEY = Bun.env.KAGAMI_API_KEY;
+const API_URL = process.env.KAGAMI_API_URL;
+const API_KEY = process.env.KAGAMI_API_KEY;
 
 function findJsonlFiles(dir: string): string[] {
 	const files: string[] = [];
