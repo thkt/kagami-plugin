@@ -6,7 +6,10 @@
   "plugins": [
     {
       "name": "kagami",
-      "source": ".",
+      "source": {
+        "source": "github",
+        "repo": "thkt/kagami-plugin"
+      },
       "description": "Claude Code usage analytics collector"
     }
   ]
