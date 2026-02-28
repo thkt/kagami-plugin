@@ -18,7 +18,7 @@ export interface MessageSummary {
 }
 
 export interface ToolEventInput {
-	category: "skill" | "subagent" | "mcp" | "builtin";
+	category: "skill" | "subagent" | "mcp";
 	toolName: string;
 	toolInput: Record<string, unknown> | null;
 	model: string;

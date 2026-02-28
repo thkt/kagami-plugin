@@ -15,24 +15,24 @@ describe("categorize", () => {
 		expect(categorize("Agent", { subagent_type: "Explore" })).toBe("subagent");
 	});
 
-	test("Agent without subagent_type → builtin", () => {
-		expect(categorize("Agent", {})).toBe("builtin");
+	test("Agent without subagent_type → null (skip)", () => {
+		expect(categorize("Agent", {})).toBeNull();
 	});
 
 	test("mcp__ prefix → mcp", () => {
 		expect(categorize("mcp__scout__search", { query: "test" })).toBe("mcp");
 	});
 
-	test("Read → builtin", () => {
-		expect(categorize("Read", { file_path: "/tmp/test" })).toBe("builtin");
+	test("Read → null (skip)", () => {
+		expect(categorize("Read", { file_path: "/tmp/test" })).toBeNull();
 	});
 
-	test("Edit → builtin", () => {
-		expect(categorize("Edit", {})).toBe("builtin");
+	test("Edit → null (skip)", () => {
+		expect(categorize("Edit", {})).toBeNull();
 	});
 
-	test("Bash → builtin", () => {
-		expect(categorize("Bash", { command: "ls" })).toBe("builtin");
+	test("Bash → null (skip)", () => {
+		expect(categorize("Bash", { command: "ls" })).toBeNull();
 	});
 });
 
@@ -150,16 +150,11 @@ describe("parseTranscript", () => {
 		expect(result!.sessionId).toBe("test-session-123");
 		expect(result!.cwd).toBe("/tmp/project");
 		expect(result!.gitBranch).toBe("main");
-		expect(result!.events).toHaveLength(2);
+		expect(result!.events).toHaveLength(1);
 
-		// First event: Read → builtin
-		expect(result!.events[0].category).toBe("builtin");
-		expect(result!.events[0].toolName).toBe("Read");
-		expect(result!.events[0].model).toBe("claude-opus-4-6");
-
-		// Second event: Skill → skill
-		expect(result!.events[1].category).toBe("skill");
-		expect(result!.events[1].toolName).toBe("commit");
+		// Read is skipped (builtin), only Skill → skill
+		expect(result!.events[0].category).toBe("skill");
+		expect(result!.events[0].toolName).toBe("commit");
 
 		// Token summary
 		expect(result!.tokenSummary.byModel["claude-opus-4-6"]).toBeDefined();
@@ -342,11 +337,8 @@ describe("parseTranscript", () => {
 		]);
 
 		const result = await parseTranscript(path);
-		expect(result).not.toBeNull();
-		// local-command-caveat はスキルではないのでスキップ
-		expect(result!.events).toHaveLength(1);
-		expect(result!.events[0].category).toBe("builtin");
-		expect(result!.events[0].toolName).toBe("Read");
+		// Read is builtin (skipped), no other events → null
+		expect(result).toBeNull();
 	});
 
 	test("skips malformed lines gracefully", async () => {
@@ -366,8 +358,8 @@ describe("parseTranscript", () => {
 						{
 							type: "tool_use",
 							id: "tu1",
-							name: "Bash",
-							input: { command: "ls" },
+							name: "mcp__scout__search",
+							input: { query: "test" },
 						},
 					],
 				},
@@ -386,8 +378,8 @@ describe("parseTranscript", () => {
 						{
 							type: "tool_use",
 							id: "tu2",
-							name: "Glob",
-							input: { pattern: "*.ts" },
+							name: "mcp__scout__fetch",
+							input: { url: "https://example.com" },
 						},
 					],
 				},

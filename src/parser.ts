@@ -19,16 +19,16 @@ import type {
  * - name === "Skill" → skill
  * - name === "Agent" && input.subagent_type → subagent
  * - name.startsWith("mcp__") → mcp
- * - それ以外 → builtin
+ * - それ以外 → null（収集対象外）
  */
 export function categorize(
   name: string,
   input: Record<string, unknown>,
-): ToolEventInput["category"] {
+): ToolEventInput["category"] | null {
   if (name === "Skill") return "skill";
   if (name === "Agent" && input.subagent_type) return "subagent";
   if (name.startsWith("mcp__")) return "mcp";
-  return "builtin";
+  return null;
 }
 
 /**
@@ -37,7 +37,7 @@ export function categorize(
  * - Skill      → input.skill (e.g. "commit", "audit")
  * - Agent → input.subagent_type (e.g. "Explore", "general-purpose")
  * - MCP        → そのまま (e.g. "mcp__scout__search")
- * - BuiltIn    → そのまま (e.g. "Read", "Edit")
+ * - その他     → そのまま (収集対象外だが念のため)
  */
 function resolveToolName(name: string, input: Record<string, unknown>): string {
   if (name === "Skill" && typeof input.skill === "string") {
@@ -172,6 +172,7 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
 
     for (const tu of toolUses) {
       const category = categorize(tu.name, tu.input);
+      if (!category) continue;
       const toolName = resolveToolName(tu.name, tu.input);
 
       events.push({
