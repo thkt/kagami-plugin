@@ -79,6 +79,7 @@ async function main() {
       }
 
       payload.ccVersion = "backfill";
+      payload.source = "backfill";
 
       if (dryRun) {
         console.log(

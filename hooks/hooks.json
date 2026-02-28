@@ -1,16 +1,28 @@
 {
-	"description": "kagami analytics collector - captures session data on stop",
-	"hooks": {
-		"Stop": [
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-hook.sh",
-						"timeout": 10000
-					}
-				]
-			}
-		]
-	}
+  "description": "kagami analytics collector - captures session data on stop and startup",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-hook.sh",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/startup-send.sh",
+            "timeout": 10000
+          }
+        ]
+      }
+    ]
+  }
 }

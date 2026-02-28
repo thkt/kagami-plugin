@@ -1,0 +1,21 @@
+project_name: "kagami-plugin"
+updated: "2026-02-28T17:55:43Z"
+source: hook
+project_type: "node"
+frameworks:
+  []
+entry_points:
+  []
+key_exports:
+  - "function categorize"
+  - "function estimateCost"
+  - "function extractSkillName"
+  - "function findRecentJsonlFiles"
+  - "function sendPayload"
+  - "interface EventPayload"
+  - "interface MessageSummary"
+  - "interface ModelTokens"
+  - "interface TokenSummary"
+  - "interface ToolEventInput"
+  - "interface TranscriptLine"
+  - "type ContentBlock"

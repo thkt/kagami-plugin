@@ -8,6 +8,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { sendPayload } from "./api";
 import { parseTranscript } from "./parser";
+import { readStdin } from "./stdin";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,14 +23,6 @@ const API_URL = process.env.KAGAMI_API_URL;
 const API_KEY = process.env.KAGAMI_API_KEY;
 
 if (!API_URL) process.exit(0); // 未設定なら何もしない
-
-async function readStdin(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks).toString("utf-8");
-}
 
 async function main() {
   // stdin から hook input を読む
@@ -59,6 +52,7 @@ async function main() {
   } catch {
     payload.ccVersion = "unknown";
   }
+  payload.source = "stop";
 
   // API に POST (fire-and-forget, タイムアウト 8s)
   try {

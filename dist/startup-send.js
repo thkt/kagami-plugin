@@ -1,8 +1,11 @@
 import { createRequire } from "node:module";
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
-// src/stop-hook.ts
+// src/startup-send.ts
 import { execFile as execFile2 } from "node:child_process";
+import { readdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { promisify as promisify2 } from "node:util";
 
 // src/api.ts
@@ -224,13 +227,45 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf-8");
 }
 
-// src/stop-hook.ts
+// src/startup-send.ts
 var execFileAsync2 = promisify2(execFile2);
-var API_URL = process.env.KAGAMI_API_URL;
-var API_KEY = process.env.KAGAMI_API_KEY;
-if (!API_URL)
-  process.exit(0);
+var MAX_AGE_MS = 48 * 60 * 60 * 1000;
+function findRecentJsonlFiles(dir, currentTranscript) {
+  const now = Date.now();
+  const resolved = currentTranscript ? resolve(currentTranscript) : "";
+  const files = [];
+  function walk(current) {
+    let entries;
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (entry.name.endsWith(".jsonl")) {
+        if (resolve(fullPath) === resolved)
+          continue;
+        try {
+          const { mtimeMs } = statSync(fullPath);
+          if (now - mtimeMs <= MAX_AGE_MS)
+            files.push(fullPath);
+        } catch {
+          continue;
+        }
+      }
+    }
+  }
+  walk(dir);
+  return files;
+}
 async function main() {
+  const API_URL = process.env.KAGAMI_API_URL;
+  const API_KEY = process.env.KAGAMI_API_KEY;
+  if (!API_URL)
+    process.exit(0);
   const raw = await readStdin();
   let input;
   try {
@@ -238,22 +273,34 @@ async function main() {
   } catch {
     process.exit(0);
   }
-  if (!input.transcript_path) {
+  const currentTranscript = input.transcript_path ?? "";
+  const projectsDir = join(homedir(), ".claude", "projects");
+  try {
+    statSync(projectsDir);
+  } catch {
     process.exit(0);
   }
-  const payload = await parseTranscript(input.transcript_path);
-  if (!payload) {
+  const files = findRecentJsonlFiles(projectsDir, currentTranscript);
+  if (files.length === 0)
     process.exit(0);
-  }
+  let ccVersion = "unknown";
   try {
     const { stdout } = await execFileAsync2("claude", ["--version"]);
-    payload.ccVersion = stdout.trim();
-  } catch {
-    payload.ccVersion = "unknown";
-  }
-  payload.source = "stop";
-  try {
-    await sendPayload(API_URL, API_KEY, payload, 8000);
+    ccVersion = stdout.trim();
   } catch {}
+  for (const file of files) {
+    try {
+      const payload = await parseTranscript(file);
+      if (!payload)
+        continue;
+      payload.ccVersion = ccVersion;
+      payload.source = "startup-send";
+      await sendPayload(API_URL, API_KEY, payload, 8000);
+    } catch {}
+  }
 }
-main();
+if (__require.main == __require.module)
+  main();
+export {
+  findRecentJsonlFiles
+};
