@@ -1,6 +1,6 @@
 # Architecture - kagami-plugin
 
-> Updated: 2026-02-28T17:55:43Z | Type: node | Frameworks: N/A
+> Updated: 2026-02-28T20:16:38Z | Type: node | Frameworks: N/A
 
 ## Structure
 

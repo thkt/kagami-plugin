@@ -82,6 +82,7 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
   const events: ToolEventInput[] = [];
   const byModel: Record<string, ModelTokens> = {};
   let sessionId = "";
+  let agentId = "";
   let cwd = "";
   let gitBranch: string | null = null;
   let firstTimestamp = "";
@@ -105,6 +106,7 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
 
     // セッション情報を取得
     if (line.sessionId && !sessionId) sessionId = line.sessionId;
+    if (line.agentId && !agentId) agentId = line.agentId;
     if (line.cwd && !cwd) cwd = line.cwd;
     if (line.gitBranch !== undefined && gitBranch === null) gitBranch = line.gitBranch ?? null;
     if (line.timestamp) {
@@ -191,6 +193,9 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
 
   if (!sessionId || events.length === 0) return null;
 
+  // subagent は親と sessionId が同じなので agentId で区別する
+  const effectiveSessionId = agentId ? `${sessionId}:${agentId}` : sessionId;
+
   // コスト算出 (BR-02)
   let totalCost = 0;
   for (const [model, tokens] of Object.entries(byModel)) {
@@ -202,7 +207,7 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
   const userId = await getGitUserEmail(cwd);
 
   return {
-    sessionId,
+    sessionId: effectiveSessionId,
     userId,
     cwd,
     gitBranch,

@@ -80,6 +80,7 @@ async function parseTranscript(filePath) {
   const events = [];
   const byModel = {};
   let sessionId = "";
+  let agentId = "";
   let cwd = "";
   let gitBranch = null;
   let firstTimestamp = "";
@@ -100,6 +101,8 @@ async function parseTranscript(filePath) {
     }
     if (line.sessionId && !sessionId)
       sessionId = line.sessionId;
+    if (line.agentId && !agentId)
+      agentId = line.agentId;
     if (line.cwd && !cwd)
       cwd = line.cwd;
     if (line.gitBranch !== undefined && gitBranch === null)
@@ -176,6 +179,7 @@ async function parseTranscript(filePath) {
   }
   if (!sessionId || events.length === 0)
     return null;
+  const effectiveSessionId = agentId ? `${sessionId}:${agentId}` : sessionId;
   let totalCost = 0;
   for (const [model, tokens] of Object.entries(byModel)) {
     tokens.estimatedCostUsd = estimateCost(model, tokens);
@@ -183,7 +187,7 @@ async function parseTranscript(filePath) {
   }
   const userId = await getGitUserEmail(cwd);
   return {
-    sessionId,
+    sessionId: effectiveSessionId,
     userId,
     cwd,
     gitBranch,

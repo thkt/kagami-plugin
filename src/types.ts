@@ -51,6 +51,8 @@ export interface TranscriptLine {
   timestamp?: string;
   cwd?: string;
   gitBranch?: string;
+  /** subagent セッションの場合に設定される */
+  agentId?: string;
   /** スキル展開やメタ情報の注入を示すフラグ */
   isMeta?: boolean;
   message?: {

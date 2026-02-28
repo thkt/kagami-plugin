@@ -1,0 +1,13 @@
+{
+  "name": "kagami",
+  "owner": {
+    "name": "thkt"
+  },
+  "plugins": [
+    {
+      "name": "kagami",
+      "source": ".",
+      "description": "Claude Code usage analytics collector"
+    }
+  ]
+}

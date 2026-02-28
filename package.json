@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build src/stop-hook.ts src/startup-send.ts --outdir=dist --target=node",
+    "build": "bun build src/stop-hook.ts src/startup-send.ts src/backfill.ts --outdir=dist --target=node",
     "backfill": "bun run src/backfill.ts",
     "test": "bun test"
   },

@@ -341,6 +341,75 @@ describe("parseTranscript", () => {
 		expect(result).toBeNull();
 	});
 
+	test("composes sessionId with agentId for subagent JSONL", async () => {
+		const path = createJsonlFile([
+			{
+				type: "user",
+				sessionId: "parent-session-abc",
+				agentId: "a14aaf1",
+				cwd: "/tmp/project",
+				timestamp: "2026-02-28T10:00:00Z",
+				message: {
+					role: "user",
+					content: [{ type: "text", text: "Translate files" }],
+				},
+			},
+			{
+				type: "assistant",
+				sessionId: "parent-session-abc",
+				agentId: "a14aaf1",
+				timestamp: "2026-02-28T10:00:01Z",
+				message: {
+					role: "assistant",
+					model: "claude-sonnet-4-6",
+					usage: { input_tokens: 100, output_tokens: 50 },
+					content: [
+						{
+							type: "tool_use",
+							id: "tu1",
+							name: "mcp__scout__fetch",
+							input: { url: "https://example.com" },
+						},
+					],
+				},
+			},
+		]);
+
+		const result = await parseTranscript(path);
+		expect(result).not.toBeNull();
+		expect(result!.sessionId).toBe("parent-session-abc:a14aaf1");
+		expect(result!.events).toHaveLength(1);
+		expect(result!.events[0].category).toBe("mcp");
+	});
+
+	test("keeps original sessionId when no agentId (parent session)", async () => {
+		const path = createJsonlFile([
+			{
+				type: "assistant",
+				sessionId: "parent-session-abc",
+				cwd: "/tmp",
+				timestamp: "2026-02-28T10:00:00Z",
+				message: {
+					role: "assistant",
+					model: "claude-opus-4-6",
+					usage: { input_tokens: 50, output_tokens: 20 },
+					content: [
+						{
+							type: "tool_use",
+							id: "tu1",
+							name: "Skill",
+							input: { skill: "commit" },
+						},
+					],
+				},
+			},
+		]);
+
+		const result = await parseTranscript(path);
+		expect(result).not.toBeNull();
+		expect(result!.sessionId).toBe("parent-session-abc");
+	});
+
 	test("skips malformed lines gracefully", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "kagami-test-"));
 		const path = join(dir, "session.jsonl");
