@@ -1,0 +1,7 @@
+{
+	"name": "kagami",
+	"description": "Claude Code usage analytics collector. Captures tool usage, token consumption, and session data for the kagami dashboard.",
+	"author": {
+		"name": "thkt"
+	}
+}

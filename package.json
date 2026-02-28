@@ -1,0 +1,14 @@
+{
+	"name": "kagami-plugin",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "bun build src/stop-hook.ts --outdir=dist --target=node",
+		"backfill": "bun run src/backfill.ts",
+		"test": "bun test"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.2.0",
+		"typescript": "^5.8.3"
+	}
+}
