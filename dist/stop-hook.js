@@ -67,6 +67,8 @@ async function parseTranscript(filePath) {
   let firstTimestamp = "";
   let lastTimestamp = "";
   let currentModel = "";
+  let userMessages = 0;
+  let assistantMessages = 0;
   const rl = createInterface({
     input: createReadStream(filePath),
     crlfDelay: Number.POSITIVE_INFINITY
@@ -89,6 +91,10 @@ async function parseTranscript(filePath) {
         firstTimestamp = line.timestamp;
       lastTimestamp = line.timestamp;
     }
+    if (line.type === "user" && !line.isMeta)
+      userMessages++;
+    if (line.type === "assistant")
+      assistantMessages++;
     if (line.type === "user" && line.isMeta === true && line.message?.content && Array.isArray(line.message.content)) {
       const skillName = extractSkillName(line.message.content);
       if (skillName) {
@@ -168,6 +174,10 @@ async function parseTranscript(filePath) {
     tokenSummary: {
       byModel,
       totalEstimatedCostUsd: totalCost
+    },
+    messageSummary: {
+      userMessages,
+      assistantMessages
     }
   };
 }

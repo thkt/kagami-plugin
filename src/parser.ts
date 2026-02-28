@@ -87,6 +87,8 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
   let firstTimestamp = "";
   let lastTimestamp = "";
   let currentModel = "";
+  let userMessages = 0;
+  let assistantMessages = 0;
 
   const rl = createInterface({
     input: createReadStream(filePath),
@@ -109,6 +111,10 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
       if (!firstTimestamp) firstTimestamp = line.timestamp;
       lastTimestamp = line.timestamp;
     }
+
+    // メッセージ数カウント（isMeta はシステム注入なので除外）
+    if (line.type === "user" && !line.isMeta) userMessages++;
+    if (line.type === "assistant") assistantMessages++;
 
     // isMeta: true の user メッセージからスラッシュコマンド呼び出しを検出
     if (
@@ -206,6 +212,10 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
     tokenSummary: {
       byModel,
       totalEstimatedCostUsd: totalCost,
+    },
+    messageSummary: {
+      userMessages,
+      assistantMessages,
     },
   };
 }

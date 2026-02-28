@@ -9,6 +9,12 @@ export interface EventPayload {
 	sessionEndedAt: string;
 	events: ToolEventInput[];
 	tokenSummary: TokenSummary;
+	messageSummary: MessageSummary;
+}
+
+export interface MessageSummary {
+	userMessages: number;
+	assistantMessages: number;
 }
 
 export interface ToolEventInput {
