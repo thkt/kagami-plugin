@@ -1,12 +1,16 @@
+import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
+import { promisify } from "node:util";
 import { estimateCost } from "./cost";
+
+const execFileAsync = promisify(execFile);
 import type {
-	ContentBlock,
-	EventPayload,
-	ModelTokens,
-	ToolEventInput,
-	TranscriptLine,
+  ContentBlock,
+  EventPayload,
+  ModelTokens,
+  ToolEventInput,
+  TranscriptLine,
 } from "./types";
 
 /**
@@ -18,13 +22,13 @@ import type {
  * - それ以外 → builtin
  */
 export function categorize(
-	name: string,
-	input: Record<string, unknown>,
+  name: string,
+  input: Record<string, unknown>,
 ): ToolEventInput["category"] {
-	if (name === "Skill") return "skill";
-	if (name === "Agent" && input.subagent_type) return "subagent";
-	if (name.startsWith("mcp__")) return "mcp";
-	return "builtin";
+  if (name === "Skill") return "skill";
+  if (name === "Agent" && input.subagent_type) return "subagent";
+  if (name.startsWith("mcp__")) return "mcp";
+  return "builtin";
 }
 
 /**
@@ -35,17 +39,14 @@ export function categorize(
  * - MCP        → そのまま (e.g. "mcp__scout__search")
  * - BuiltIn    → そのまま (e.g. "Read", "Edit")
  */
-function resolveToolName(
-	name: string,
-	input: Record<string, unknown>,
-): string {
-	if (name === "Skill" && typeof input.skill === "string") {
-		return input.skill;
-	}
-	if (name === "Agent" && typeof input.subagent_type === "string") {
-		return input.subagent_type;
-	}
-	return name;
+function resolveToolName(name: string, input: Record<string, unknown>): string {
+  if (name === "Skill" && typeof input.skill === "string") {
+    return input.skill;
+  }
+  if (name === "Agent" && typeof input.subagent_type === "string") {
+    return input.subagent_type;
+  }
+  return name;
 }
 
 /**
@@ -55,178 +56,171 @@ function resolveToolName(
  * ネスト呼び出し（Skill tool 経由）は `# <Name>:` 形式なのでマッチしない。
  */
 export function extractSkillName(content: ContentBlock[]): string | null {
-	for (const block of content) {
-		if (block.type !== "text") continue;
-		const match = block.text.match(/^#\s*\/(\S+)/);
-		if (match) return match[1];
-	}
-	return null;
+  for (const block of content) {
+    if (block.type !== "text") continue;
+    const match = block.text.match(/^#\s*\/(\S+)/);
+    if (match) return match[1];
+  }
+  return null;
 }
 
 /** assistant メッセージから tool_use ブロックを抽出する */
 function extractToolUses(
-	content: ContentBlock[],
+  content: ContentBlock[],
 ): Array<{ name: string; input: Record<string, unknown> }> {
-	return content
-		.filter(
-			(block): block is Extract<ContentBlock, { type: "tool_use" }> =>
-				block.type === "tool_use",
-		)
-		.map((block) => ({ name: block.name, input: block.input }));
+  return content
+    .filter(
+      (block): block is Extract<ContentBlock, { type: "tool_use" }> => block.type === "tool_use",
+    )
+    .map((block) => ({ name: block.name, input: block.input }));
 }
 
 /**
  * JSONL ファイルをストリーミング解析し、EventPayload を構築する (FR-001)
  */
-export async function parseTranscript(
-	filePath: string,
-): Promise<EventPayload | null> {
-	const events: ToolEventInput[] = [];
-	const byModel: Record<string, ModelTokens> = {};
-	let sessionId = "";
-	let cwd = "";
-	let gitBranch: string | null = null;
-	let firstTimestamp = "";
-	let lastTimestamp = "";
-	let currentModel = "";
+export async function parseTranscript(filePath: string): Promise<EventPayload | null> {
+  const events: ToolEventInput[] = [];
+  const byModel: Record<string, ModelTokens> = {};
+  let sessionId = "";
+  let cwd = "";
+  let gitBranch: string | null = null;
+  let firstTimestamp = "";
+  let lastTimestamp = "";
+  let currentModel = "";
 
-	const rl = createInterface({
-		input: createReadStream(filePath),
-		crlfDelay: Number.POSITIVE_INFINITY,
-	});
+  const rl = createInterface({
+    input: createReadStream(filePath),
+    crlfDelay: Number.POSITIVE_INFINITY,
+  });
 
-	for await (const rawLine of rl) {
-		let line: TranscriptLine;
-		try {
-			line = JSON.parse(rawLine);
-		} catch {
-			continue; // 不正行はスキップ
-		}
+  for await (const rawLine of rl) {
+    let line: TranscriptLine;
+    try {
+      line = JSON.parse(rawLine);
+    } catch {
+      continue; // 不正行はスキップ
+    }
 
-		// セッション情報を取得
-		if (line.sessionId && !sessionId) sessionId = line.sessionId;
-		if (line.cwd && !cwd) cwd = line.cwd;
-		if (line.gitBranch !== undefined && gitBranch === null)
-			gitBranch = line.gitBranch ?? null;
-		if (line.timestamp) {
-			if (!firstTimestamp) firstTimestamp = line.timestamp;
-			lastTimestamp = line.timestamp;
-		}
+    // セッション情報を取得
+    if (line.sessionId && !sessionId) sessionId = line.sessionId;
+    if (line.cwd && !cwd) cwd = line.cwd;
+    if (line.gitBranch !== undefined && gitBranch === null) gitBranch = line.gitBranch ?? null;
+    if (line.timestamp) {
+      if (!firstTimestamp) firstTimestamp = line.timestamp;
+      lastTimestamp = line.timestamp;
+    }
 
-		// isMeta: true の user メッセージからスラッシュコマンド呼び出しを検出
-		if (
-			line.type === "user" &&
-			line.isMeta === true &&
-			line.message?.content &&
-			Array.isArray(line.message.content)
-		) {
-			const skillName = extractSkillName(line.message.content);
-			if (skillName) {
-				events.push({
-					category: "skill",
-					toolName: skillName,
-					toolInput: null,
-					model: currentModel,
-					inputTokens: 0,
-					outputTokens: 0,
-					cacheCreationTokens: 0,
-					cacheReadTokens: 0,
-					timestamp: line.timestamp ?? lastTimestamp,
-				});
-			}
-		}
+    // isMeta: true の user メッセージからスラッシュコマンド呼び出しを検出
+    if (
+      line.type === "user" &&
+      line.isMeta === true &&
+      line.message?.content &&
+      Array.isArray(line.message.content)
+    ) {
+      const skillName = extractSkillName(line.message.content);
+      if (skillName) {
+        events.push({
+          category: "skill",
+          toolName: skillName,
+          toolInput: null,
+          model: currentModel,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          timestamp: line.timestamp ?? lastTimestamp,
+        });
+      }
+    }
 
-		// assistant メッセージだけ処理
-		if (line.type !== "assistant" || !line.message) continue;
-		const msg = line.message;
+    // assistant メッセージだけ処理
+    if (line.type !== "assistant" || !line.message) continue;
+    const msg = line.message;
 
-		// モデルとトークン集計
-		const model = msg.model ?? currentModel;
-		if (model) currentModel = model;
+    // モデルとトークン集計
+    const model = msg.model ?? currentModel;
+    if (model) currentModel = model;
 
-		if (msg.usage) {
-			const u = msg.usage;
-			if (!byModel[model]) {
-				byModel[model] = {
-					inputTokens: 0,
-					outputTokens: 0,
-					cacheCreationTokens: 0,
-					cacheReadTokens: 0,
-					estimatedCostUsd: 0,
-				};
-			}
-			const m = byModel[model];
-			m.inputTokens += u.input_tokens ?? 0;
-			m.outputTokens += u.output_tokens ?? 0;
-			m.cacheCreationTokens += u.cache_creation_input_tokens ?? 0;
-			m.cacheReadTokens += u.cache_read_input_tokens ?? 0;
-		}
+    if (msg.usage) {
+      const u = msg.usage;
+      if (!byModel[model]) {
+        byModel[model] = {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          estimatedCostUsd: 0,
+        };
+      }
+      const m = byModel[model];
+      m.inputTokens += u.input_tokens ?? 0;
+      m.outputTokens += u.output_tokens ?? 0;
+      m.cacheCreationTokens += u.cache_creation_input_tokens ?? 0;
+      m.cacheReadTokens += u.cache_read_input_tokens ?? 0;
+    }
 
-		// tool_use 抽出
-		if (!msg.content) continue;
-		const toolUses = extractToolUses(msg.content);
-		const timestamp = line.timestamp ?? lastTimestamp;
+    // tool_use 抽出
+    if (!msg.content) continue;
+    const toolUses = extractToolUses(msg.content);
+    const timestamp = line.timestamp ?? lastTimestamp;
 
-		for (const tu of toolUses) {
-			const category = categorize(tu.name, tu.input);
-			const toolName = resolveToolName(tu.name, tu.input);
+    for (const tu of toolUses) {
+      const category = categorize(tu.name, tu.input);
+      const toolName = resolveToolName(tu.name, tu.input);
 
-			events.push({
-				category,
-				toolName,
-				toolInput: tu.input,
-				model,
-				inputTokens: msg.usage?.input_tokens ?? 0,
-				outputTokens: msg.usage?.output_tokens ?? 0,
-				cacheCreationTokens: msg.usage?.cache_creation_input_tokens ?? 0,
-				cacheReadTokens: msg.usage?.cache_read_input_tokens ?? 0,
-				timestamp,
-			});
-		}
-	}
+      events.push({
+        category,
+        toolName,
+        toolInput: tu.input,
+        model,
+        inputTokens: msg.usage?.input_tokens ?? 0,
+        outputTokens: msg.usage?.output_tokens ?? 0,
+        cacheCreationTokens: msg.usage?.cache_creation_input_tokens ?? 0,
+        cacheReadTokens: msg.usage?.cache_read_input_tokens ?? 0,
+        timestamp,
+      });
+    }
+  }
 
-	if (!sessionId || events.length === 0) return null;
+  if (!sessionId || events.length === 0) return null;
 
-	// コスト算出 (BR-02)
-	let totalCost = 0;
-	for (const [model, tokens] of Object.entries(byModel)) {
-		tokens.estimatedCostUsd = estimateCost(model, tokens);
-		totalCost += tokens.estimatedCostUsd;
-	}
+  // コスト算出 (BR-02)
+  let totalCost = 0;
+  for (const [model, tokens] of Object.entries(byModel)) {
+    tokens.estimatedCostUsd = estimateCost(model, tokens);
+    totalCost += tokens.estimatedCostUsd;
+  }
 
-	// userId: git user.email → fallback to system username
-	const userId = await getGitUserEmail(cwd);
+  // userId: git user.email → fallback to system username
+  const userId = await getGitUserEmail(cwd);
 
-	return {
-		sessionId,
-		userId,
-		cwd,
-		gitBranch,
-		ccVersion: "", // Stop hook から注入
-		sessionStartedAt: firstTimestamp,
-		sessionEndedAt: lastTimestamp,
-		events,
-		tokenSummary: {
-			byModel,
-			totalEstimatedCostUsd: totalCost,
-		},
-	};
+  return {
+    sessionId,
+    userId,
+    cwd,
+    gitBranch,
+    ccVersion: "", // Stop hook から注入
+    sessionStartedAt: firstTimestamp,
+    sessionEndedAt: lastTimestamp,
+    events,
+    tokenSummary: {
+      byModel,
+      totalEstimatedCostUsd: totalCost,
+    },
+  };
 }
 
 async function getGitUserEmail(cwd: string): Promise<string> {
-	try {
-		const proc = Bun.spawn(["git", "config", "user.email"], {
-			cwd,
-			stdout: "pipe",
-			stderr: "ignore",
-		});
-		const text = await new Response(proc.stdout).text();
-		return text.trim() || getUserFallback();
-	} catch {
-		return getUserFallback();
-	}
+  try {
+    const { stdout } = await execFileAsync("git", ["config", "user.email"], {
+      cwd,
+    });
+    return stdout.trim() || getUserFallback();
+  } catch {
+    return getUserFallback();
+  }
 }
 
 function getUserFallback(): string {
-	return Bun.env.USER ?? Bun.env.USERNAME ?? "unknown";
+  return process.env.USER ?? process.env.USERNAME ?? "unknown";
 }
