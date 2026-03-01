@@ -1,75 +1,76 @@
 # kagami
 
-Claude Code plugin that collects usage analytics per session — tool usage, token consumption, and estimated cost.
+Claude Code のセッションごとに利用状況（ツール利用・トークン消費・推定コスト）を自動収集するプラグイン。
 
-## What it does
+## 収集データ
 
-On every session stop (and startup for missed sessions), kagami parses the session transcript (JSONL) and sends a summary to your kagami API server.
+セッション終了時（および次回起動時の未送信分リカバリ）に、トランスクリプト（JSONL）を解析して kagami API サーバーへ送信します。
 
-**Collected data:**
+| データ         | 内容                                                                               |
+| -------------- | ---------------------------------------------------------------------------------- |
+| ツール利用     | skill / subagent / mcp の各ツール呼び出し（名前・モデル）                          |
+| トークン消費   | input / output / cache-creation / cache-read トークン数（モデル別）                |
+| 推定コスト     | Anthropic 公式料金ベースの USD コスト                                              |
+| セッション情報 | セッション ID、ユーザー ID（git email）、作業ディレクトリ、ブランチ、CC バージョン |
 
-| Data              | Description                                                                         |
-| ----------------- | ----------------------------------------------------------------------------------- |
-| Tool usage        | Each tool call with category (`skill` / `subagent` / `mcp`), name, and model        |
-| Token consumption | Input / output / cache-creation / cache-read tokens, grouped by model               |
-| Estimated cost    | USD cost estimate based on Anthropic's published pricing                            |
-| Session metadata  | Session ID, user ID (git email), working directory, git branch, Claude Code version |
+## セットアップ
 
-## Install
+### 1. 環境変数の設定
 
 ```bash
-# 1. Add marketplace
+export KAGAMI_API_URL="https://your-kagami-server.example.com"
+export KAGAMI_API_KEY="your-api-key"
+```
+
+`.bashrc` / `.zshrc` 等に追加してください。`KAGAMI_API_URL` が未設定の場合、hook は何もせず終了します（エラーもネットワーク通信も発生しません）。
+
+### 2. プラグインのインストール
+
+```bash
+# marketplace 追加
 /plugin marketplace add thkt/kagami-plugin
 
-# 2. Install plugin
+# プラグインインストール
 claude plugin install kagami@kagami
 ```
 
-Or for local development:
+ローカル開発時:
 
 ```bash
 claude --plugin-dir /path/to/kagami-plugin
 ```
 
-## Setup
+### 3. 過去セッションの送信（任意）
 
-Set the environment variables for the kagami API:
-
-```bash
-export KAGAMI_API_URL="https://your-kagami-server.example.com"
-export KAGAMI_API_KEY="your-api-key"  # optional
-```
-
-If `KAGAMI_API_URL` is not set, the hook exits silently — no errors, no network calls.
-
-### Backfill past sessions
-
-After initial setup, you can send past session data:
+セットアップ前のセッションデータを一括送信できます。プラグインのインストール先パスは環境依存のため、リポジトリから直接実行するのが確実です。
 
 ```bash
-node dist/backfill.js --dry-run  # preview only
-node dist/backfill.js            # send to API
+npx -y degit thkt/kagami-plugin /tmp/kagami-plugin
+node /tmp/kagami-plugin/dist/backfill.js --dry-run  # プレビュー
+node /tmp/kagami-plugin/dist/backfill.js            # 送信
 ```
 
-## How it works
+外部依存なし（Node.js のみで実行可能）。
+
+## 仕組み
 
 ```
-Session Stop (normal exit)
+セッション終了（通常終了）
   → hooks/stop-hook.sh
     → node dist/stop-hook.js
-      → Parse transcript JSONL → POST to API
+      → トランスクリプト JSONL を解析 → API へ POST
 
-Session Start (next session)
+セッション開始（次回起動時）
   → hooks/startup-send.sh
     → node dist/startup-send.js
-      → Scan ~/.claude/projects/ for recent JSONL (48h)
-      → Parse & POST any missed sessions
-      → Server deduplicates by sessionId
+      → ~/.claude/projects/ 配下の直近 48 時間の JSONL をスキャン
+      → 未送信セッションを解析 & POST
+      → サーバー側で sessionId による重複排除
 ```
 
-Both hooks run in the background and exit immediately so they never block session start/stop (timeout: 10s).
+どちらもバックグラウンド実行（10 秒タイムアウト）のため、セッションの開始・終了をブロックしません。
 
-## API payload
+## API ペイロード
 
 ```jsonc
 {
@@ -109,9 +110,9 @@ Both hooks run in the background and exit immediately so they never block sessio
 }
 ```
 
-## Development
+## 開発
 
-Requires [Bun](https://bun.sh/) for building and testing.
+ビルド・テストには [Bun](https://bun.sh/) が必要です。
 
 ```bash
 bun install
@@ -119,7 +120,7 @@ bun test
 bun run build   # → dist/stop-hook.js, dist/startup-send.js, dist/backfill.js
 ```
 
-The built `dist/*.js` files are committed to the repo so that the plugin runs with Node.js only — no Bun required at runtime.
+ビルド済みの `dist/*.js` はリポジトリにコミットされているため、ランタイムでは Node.js のみで動作します（Bun 不要）。
 
 ## License
 
