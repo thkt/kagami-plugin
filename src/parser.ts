@@ -65,7 +65,8 @@ const RE_BASH_CMD = /(?:\w+=\S+\s+)*(\S+)/;
 export function extractBashToolName(command: string): string {
   const m = command.match(RE_BASH_CMD);
   if (!m) return "Bash";
-  return basename(m[1]) || "Bash";
+  const name = basename(m[1]);
+  return name === "." ? "Bash" : name || "Bash";
 }
 
 function resolveToolName(name: string, input: Record<string, unknown>): string {

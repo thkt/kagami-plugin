@@ -86,7 +86,7 @@ async function main() {
     const { stdout } = await execFileAsync("claude", ["--version"]);
     ccVersion = stdout.trim();
   } catch {
-    // claude CLI が見つからない場合は "unknown"
+    // ignore: claude CLI not found
   }
 
   for (const file of files) {
@@ -97,7 +97,7 @@ async function main() {
       payload.source = "startup-send";
       await sendPayload(API_URL, API_KEY, payload, 8000);
     } catch {
-      // 個別のエラーは無視して次へ
+      // skip failed files
     }
   }
 }

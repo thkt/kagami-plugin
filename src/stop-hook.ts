@@ -22,30 +22,26 @@ interface StopHookInput {
 const API_URL = process.env.KAGAMI_API_URL;
 const API_KEY = process.env.KAGAMI_API_KEY;
 
-if (!API_URL) process.exit(0); // 未設定なら何もしない
+if (!API_URL) process.exit(0);
 
 async function main() {
-  // stdin から hook input を読む
   const raw = await readStdin();
   let input: StopHookInput;
   try {
     input = JSON.parse(raw);
   } catch {
-    process.exit(0); // JSON パース失敗は無視
+    process.exit(0);
   }
 
-  // transcript_path がなければ何もしない
   if (!input.transcript_path) {
     process.exit(0);
   }
 
-  // JSONL を解析
   const payload = await parseTranscript(input.transcript_path);
   if (!payload) {
-    process.exit(0); // tool_use なしセッションはスキップ
+    process.exit(0);
   }
 
-  // ccVersion を注入
   try {
     const { stdout } = await execFileAsync("claude", ["--version"]);
     payload.ccVersion = stdout.trim();
@@ -54,11 +50,10 @@ async function main() {
   }
   payload.source = "stop";
 
-  // API に POST (fire-and-forget, タイムアウト 8s)
   try {
     await sendPayload(API_URL, API_KEY, payload, 8000);
   } catch {
-    // ネットワークエラーは無視 (NFR-005: ブロックしない)
+    // network errors are ignored — session exit must not block (NFR-005)
   }
 }
 
