@@ -55,7 +55,6 @@ var BUILTIN_TOOLS = new Set([
   "Grep",
   "Glob",
   "LS",
-  "Bash",
   "WebSearch",
   "WebFetch",
   "LSP",
@@ -86,6 +85,8 @@ function categorize(name, input) {
     return "subagent";
   if (name.startsWith("mcp__"))
     return "mcp";
+  if (name === "Bash")
+    return "cli";
   if (BUILTIN_TOOLS.has(name))
     return "builtin";
   return null;
@@ -220,7 +221,7 @@ async function parseTranscript(filePath) {
       events.push({
         category,
         toolName: resolveToolName(tu.name, tu.input),
-        toolInput: category === "builtin" ? null : tu.input,
+        toolInput: category === "builtin" || category === "cli" ? null : tu.input,
         model,
         inputTokens: Math.round((msg.usage?.input_tokens ?? 0) / divisor),
         outputTokens: Math.round((msg.usage?.output_tokens ?? 0) / divisor),
@@ -283,16 +284,17 @@ function getUserFallback() {
 function truncateEvents(events, max) {
   if (events.length <= max)
     return events;
-  const builtinIndices = [];
+  const lowPriority = new Set(["builtin", "cli"]);
+  const lowPriorityIndices = [];
   for (let i = 0;i < events.length; i++) {
-    if (events[i].category === "builtin")
-      builtinIndices.push(i);
+    if (lowPriority.has(events[i].category))
+      lowPriorityIndices.push(i);
   }
-  const builtinKeep = Math.max(0, max - (events.length - builtinIndices.length));
-  let dropPtr = builtinKeep;
+  const lowPriorityKeep = Math.max(0, max - (events.length - lowPriorityIndices.length));
+  let dropPtr = lowPriorityKeep;
   const result = [];
   for (let i = 0;i < events.length && result.length < max; i++) {
-    if (dropPtr < builtinIndices.length && builtinIndices[dropPtr] === i) {
+    if (dropPtr < lowPriorityIndices.length && lowPriorityIndices[dropPtr] === i) {
       dropPtr++;
       continue;
     }

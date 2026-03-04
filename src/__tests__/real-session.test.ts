@@ -33,7 +33,7 @@ describe("parseTranscript with real session", () => {
 
 			// 全カテゴリが有効な値であること
 			for (const event of result!.events) {
-				expect(["skill", "subagent", "mcp", "builtin"]).toContain(
+				expect(["skill", "subagent", "mcp", "builtin", "cli"]).toContain(
 					event.category,
 				);
 				expect(event.toolName).toBeTruthy();

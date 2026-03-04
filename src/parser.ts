@@ -19,7 +19,7 @@ const execFileAsync = promisify(execFile);
  * Claude Code ビルトインツール一覧
  *
  * 収集対象だが toolInput を null にしてペイロードサイズを抑える。
- * Skill / Agent / mcp__ は categorize() 内で先に分岐するためここには含めない。
+ * Skill / Agent / mcp__ / Bash は categorize() 内で先に分岐するためここには含めない。
  * SendMessage, TeamCreate 等のチーム系ツールは利用頻度が低いため対象外。
  */
 const BUILTIN_TOOLS = new Set([
@@ -30,7 +30,6 @@ const BUILTIN_TOOLS = new Set([
   "Grep",
   "Glob",
   "LS",
-  "Bash",
   "WebSearch",
   "WebFetch",
   "LSP",
@@ -69,6 +68,7 @@ export function categorize(
   if (name === "Skill") return "skill";
   if (name === "Agent" && input.subagent_type) return "subagent";
   if (name.startsWith("mcp__")) return "mcp";
+  if (name === "Bash") return "cli";
   if (BUILTIN_TOOLS.has(name)) return "builtin";
   return null;
 }
@@ -222,7 +222,7 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
       events.push({
         category,
         toolName: resolveToolName(tu.name, tu.input),
-        toolInput: category === "builtin" ? null : tu.input,
+        toolInput: category === "builtin" || category === "cli" ? null : tu.input,
         model,
         inputTokens: Math.round((msg.usage?.input_tokens ?? 0) / divisor),
         outputTokens: Math.round((msg.usage?.output_tokens ?? 0) / divisor),
@@ -297,24 +297,25 @@ function getUserFallback(): string {
 }
 
 /**
- * イベント数が上限を超えた場合、builtin を切り捨てて skill/subagent/mcp を優先する。
+ * イベント数が上限を超えた場合、builtin/cli を切り捨てて skill/subagent/mcp を優先する。
  * 時系列順は維持する。返り値は必ず max 以下。
  */
 export function truncateEvents(events: ToolEventInput[], max: number): ToolEventInput[] {
   if (events.length <= max) return events;
 
-  // builtin の index を収集し、末尾から削る（時系列順維持）
-  const builtinIndices: number[] = [];
+  const lowPriority = new Set<ToolEventInput["category"]>(["builtin", "cli"]);
+  // 低優先度の index を収集し、末尾から削る（時系列順維持）
+  const lowPriorityIndices: number[] = [];
   for (let i = 0; i < events.length; i++) {
-    if (events[i].category === "builtin") builtinIndices.push(i);
+    if (lowPriority.has(events[i].category)) lowPriorityIndices.push(i);
   }
 
-  const builtinKeep = Math.max(0, max - (events.length - builtinIndices.length));
-  // builtinIndices は昇順なので、keep 以降が drop 対象
-  let dropPtr = builtinKeep;
+  const lowPriorityKeep = Math.max(0, max - (events.length - lowPriorityIndices.length));
+  // lowPriorityIndices は昇順なので、keep 以降が drop 対象
+  let dropPtr = lowPriorityKeep;
   const result: ToolEventInput[] = [];
   for (let i = 0; i < events.length && result.length < max; i++) {
-    if (dropPtr < builtinIndices.length && builtinIndices[dropPtr] === i) {
+    if (dropPtr < lowPriorityIndices.length && lowPriorityIndices[dropPtr] === i) {
       dropPtr++;
       continue;
     }

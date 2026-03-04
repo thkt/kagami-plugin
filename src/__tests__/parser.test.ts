@@ -64,8 +64,8 @@ describe("categorize", () => {
     expect(categorize("Edit", {})).toBe("builtin");
   });
 
-  test("Bash → builtin", () => {
-    expect(categorize("Bash", { command: "ls" })).toBe("builtin");
+  test("Bash → cli", () => {
+    expect(categorize("Bash", { command: "ls" })).toBe("cli");
   });
 
   test("Write → builtin", () => {
@@ -198,6 +198,37 @@ describe("truncateEvents", () => {
     expect(result).toHaveLength(50);
     expect(result.filter((e) => e.category === "skill")).toHaveLength(10);
     expect(result.filter((e) => e.category === "builtin")).toHaveLength(40);
+  });
+
+  test("truncates cli alongside builtin as low priority", () => {
+    const skills = Array.from({ length: 10 }, (_, i) => makeEvent("skill", `s${i}`));
+    const cliEvents = Array.from({ length: 300 }, (_, i) => makeEvent("cli", `cli${i}`));
+    const builtins = Array.from({ length: 290 }, (_, i) => makeEvent("builtin", `b${i}`));
+    const events = [...skills, ...cliEvents, ...builtins];
+
+    const result = truncateEvents(events, 500);
+    expect(result).toHaveLength(500);
+    expect(result.filter((e) => e.category === "skill")).toHaveLength(10);
+    const lowPriorityCount = result.filter(
+      (e) => e.category === "cli" || e.category === "builtin",
+    ).length;
+    expect(lowPriorityCount).toBe(490);
+  });
+
+  test("truncates builtin-first then cli order preserving early low-priority", () => {
+    const builtins = Array.from({ length: 5 }, (_, i) => makeEvent("builtin", `b${i}`));
+    const cliEvents = Array.from({ length: 5 }, (_, i) => makeEvent("cli", `cli${i}`));
+    const skills = Array.from({ length: 5 }, (_, i) => makeEvent("skill", `s${i}`));
+    // builtin が先、cli が後
+    const events = [...builtins, ...cliEvents, ...skills];
+
+    const result = truncateEvents(events, 12);
+    expect(result).toHaveLength(12);
+    expect(result.filter((e) => e.category === "skill")).toHaveLength(5);
+    // 低優先度は先頭寄り（早い時系列）が残る
+    const lowPriority = result.filter((e) => e.category === "builtin" || e.category === "cli");
+    expect(lowPriority).toHaveLength(7);
+    expect(lowPriority[0].toolName).toBe("b0");
   });
 
   test("caps at max even when priority alone exceeds limit", () => {
@@ -584,7 +615,9 @@ describe("parseTranscript", () => {
     const result = await parseTranscript(path);
     expect(result).not.toBeNull();
     expect(result!.events).toHaveLength(2);
+    expect(result!.events[0].category).toBe("cli");
     expect(result!.events[0].toolName).toBe("git");
+    expect(result!.events[1].category).toBe("cli");
     expect(result!.events[1].toolName).toBe("scout");
     expect(result!.events[0].toolInput).toBeNull();
     expect(result!.events[1].toolInput).toBeNull();
