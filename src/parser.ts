@@ -1,10 +1,9 @@
 import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
+import { basename } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import { estimateCost } from "./cost";
-
-const execFileAsync = promisify(execFile);
 import type {
   ContentBlock,
   EventPayload,
@@ -13,14 +12,43 @@ import type {
   TranscriptLine,
 } from "./types";
 
+const execFileAsync = promisify(execFile);
+
 /**
- * tool_use のカテゴリを分類する (BR-01)
+ * Claude Code ビルトインツール一覧
  *
- * - name === "Skill" → skill
- * - name === "Agent" && input.subagent_type → subagent
- * - name.startsWith("mcp__") → mcp
- * - それ以外 → null（収集対象外）
+ * 収集対象だが toolInput を null にしてペイロードサイズを抑える。
+ * Skill / Agent / mcp__ は categorize() 内で先に分岐するためここには含めない。
+ * SendMessage, TeamCreate 等のチーム系ツールは利用頻度が低いため対象外。
  */
+const BUILTIN_TOOLS = new Set([
+  "Read",
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "Grep",
+  "Glob",
+  "LS",
+  "Bash",
+  "WebSearch",
+  "WebFetch",
+  "LSP",
+  "ToolSearch",
+  "TodoRead",
+  "TodoWrite",
+  "TaskCreate",
+  "TaskUpdate",
+  "TaskGet",
+  "TaskList",
+  "AskUserQuestion",
+  "EnterPlanMode",
+  "ExitPlanMode",
+  "EnterWorktree",
+]);
+
+const MAX_EVENTS = 500;
+
+/** tool_use のカテゴリを分類する (BR-01) */
 export function categorize(
   name: string,
   input: Record<string, unknown>,
@@ -28,17 +56,18 @@ export function categorize(
   if (name === "Skill") return "skill";
   if (name === "Agent" && input.subagent_type) return "subagent";
   if (name.startsWith("mcp__")) return "mcp";
+  if (BUILTIN_TOOLS.has(name)) return "builtin";
   return null;
 }
 
-/**
- * Skill/Agent の場合、表示用ツール名を抽出する
- *
- * - Skill      → input.skill (e.g. "commit", "audit")
- * - Agent → input.subagent_type (e.g. "Explore", "general-purpose")
- * - MCP        → そのまま (e.g. "mcp__scout__search")
- * - その他     → そのまま (収集対象外だが念のため)
- */
+const RE_BASH_CMD = /(?:\w+=\S+\s+)*(\S+)/;
+
+export function extractBashToolName(command: string): string {
+  const m = command.match(RE_BASH_CMD);
+  if (!m) return "Bash";
+  return basename(m[1]) || "Bash";
+}
+
 function resolveToolName(name: string, input: Record<string, unknown>): string {
   if (name === "Skill" && typeof input.skill === "string") {
     return input.skill;
@@ -46,12 +75,13 @@ function resolveToolName(name: string, input: Record<string, unknown>): string {
   if (name === "Agent" && typeof input.subagent_type === "string") {
     return input.subagent_type;
   }
+  if (name === "Bash" && typeof input.command === "string") {
+    return extractBashToolName(input.command);
+  }
   return name;
 }
 
 /**
- * isMeta: true の user メッセージからスラッシュコマンド名を抽出する
- *
  * スキル展開は `# /<name> - <description>` 形式のヘッダで始まる。
  * ネスト呼び出し（Skill tool 経由）は `# <Name>:` 形式なのでマッチしない。
  */
@@ -64,7 +94,6 @@ export function extractSkillName(content: ContentBlock[]): string | null {
   return null;
 }
 
-/** assistant メッセージから tool_use ブロックを抽出する */
 function extractToolUses(
   content: ContentBlock[],
 ): Array<{ name: string; input: Record<string, unknown> }> {
@@ -75,9 +104,6 @@ function extractToolUses(
     .map((block) => ({ name: block.name, input: block.input }));
 }
 
-/**
- * JSONL ファイルをストリーミング解析し、EventPayload を構築する (FR-001)
- */
 export async function parseTranscript(filePath: string): Promise<EventPayload | null> {
   const events: ToolEventInput[] = [];
   const byModel: Record<string, ModelTokens> = {};
@@ -101,10 +127,9 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
     try {
       line = JSON.parse(rawLine);
     } catch {
-      continue; // 不正行はスキップ
+      continue;
     }
 
-    // セッション情報を取得
     if (line.sessionId && !sessionId) sessionId = line.sessionId;
     if (line.agentId && !agentId) agentId = line.agentId;
     if (line.cwd && !cwd) cwd = line.cwd;
@@ -118,7 +143,6 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
     if (line.type === "user" && !line.isMeta) userMessages++;
     if (line.type === "assistant") assistantMessages++;
 
-    // isMeta: true の user メッセージからスラッシュコマンド呼び出しを検出
     if (
       line.type === "user" &&
       line.isMeta === true &&
@@ -141,11 +165,9 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
       }
     }
 
-    // assistant メッセージだけ処理
     if (line.type !== "assistant" || !line.message) continue;
     const msg = line.message;
 
-    // モデルとトークン集計
     const model = msg.model ?? currentModel;
     if (model) currentModel = model;
 
@@ -167,31 +189,40 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
       m.cacheReadTokens += u.cache_read_input_tokens ?? 0;
     }
 
-    // tool_use 抽出
     if (!msg.content) continue;
     const toolUses = extractToolUses(msg.content);
     const timestamp = line.timestamp ?? lastTimestamp;
 
+    // token 按分の分母: categorize に通る tool_use 数を先にカウント
+    let divisor = 0;
+    for (const tu of toolUses) {
+      if (categorize(tu.name, tu.input) !== null) divisor++;
+    }
+    if (divisor === 0) divisor = 1;
+
+    // NOTE: msg.usage はメッセージ単位。複数 tool_use を含む場合は按分する。
     for (const tu of toolUses) {
       const category = categorize(tu.name, tu.input);
       if (!category) continue;
-      const toolName = resolveToolName(tu.name, tu.input);
 
       events.push({
         category,
-        toolName,
-        toolInput: tu.input,
+        toolName: resolveToolName(tu.name, tu.input),
+        toolInput: category === "builtin" ? null : tu.input,
         model,
-        inputTokens: msg.usage?.input_tokens ?? 0,
-        outputTokens: msg.usage?.output_tokens ?? 0,
-        cacheCreationTokens: msg.usage?.cache_creation_input_tokens ?? 0,
-        cacheReadTokens: msg.usage?.cache_read_input_tokens ?? 0,
+        inputTokens: Math.round((msg.usage?.input_tokens ?? 0) / divisor),
+        outputTokens: Math.round((msg.usage?.output_tokens ?? 0) / divisor),
+        cacheCreationTokens: Math.round((msg.usage?.cache_creation_input_tokens ?? 0) / divisor),
+        cacheReadTokens: Math.round((msg.usage?.cache_read_input_tokens ?? 0) / divisor),
         timestamp,
       });
     }
   }
 
-  if (!sessionId || events.length === 0) return null;
+  // builtin を後回しにして上限内に収める
+  const truncated = truncateEvents(events, MAX_EVENTS);
+
+  if (!sessionId || truncated.length === 0) return null;
 
   // subagent は親と sessionId が同じなので agentId で区別する
   const effectiveSessionId = agentId ? `${sessionId}:${agentId}` : sessionId;
@@ -203,7 +234,6 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
     totalCost += tokens.estimatedCostUsd;
   }
 
-  // userId: git user.email → fallback to system username
   const userId = await getGitUserEmail(cwd);
 
   return {
@@ -214,7 +244,7 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
     ccVersion: "", // Stop hook から注入
     sessionStartedAt: firstTimestamp,
     sessionEndedAt: lastTimestamp,
-    events,
+    events: truncated,
     tokenSummary: {
       byModel,
       totalEstimatedCostUsd: totalCost,
@@ -239,4 +269,31 @@ async function getGitUserEmail(cwd: string): Promise<string> {
 
 function getUserFallback(): string {
   return process.env.USER ?? process.env.USERNAME ?? "unknown";
+}
+
+/**
+ * イベント数が上限を超えた場合、builtin を切り捨てて skill/subagent/mcp を優先する。
+ * 時系列順は維持する。返り値は必ず max 以下。
+ */
+export function truncateEvents(events: ToolEventInput[], max: number): ToolEventInput[] {
+  if (events.length <= max) return events;
+
+  // builtin の index を収集し、末尾から削る（時系列順維持）
+  const builtinIndices: number[] = [];
+  for (let i = 0; i < events.length; i++) {
+    if (events[i].category === "builtin") builtinIndices.push(i);
+  }
+
+  const builtinKeep = Math.max(0, max - (events.length - builtinIndices.length));
+  // builtinIndices は昇順なので、keep 以降が drop 対象
+  let dropPtr = builtinKeep;
+  const result: ToolEventInput[] = [];
+  for (let i = 0; i < events.length && result.length < max; i++) {
+    if (dropPtr < builtinIndices.length && builtinIndices[dropPtr] === i) {
+      dropPtr++;
+      continue;
+    }
+    result.push(events[i]);
+  }
+  return result;
 }
