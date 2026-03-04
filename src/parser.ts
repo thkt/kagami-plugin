@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { basename } from "node:path";
@@ -47,6 +48,18 @@ const BUILTIN_TOOLS = new Set([
 ]);
 
 const MAX_EVENTS = 500;
+
+/**
+ * Deterministic UUID from namespace + name using SHA-256.
+ * subagent の sessionId 生成に使用。結果は UUID v4 形式。
+ */
+export function deterministicUuid(namespace: string, name: string): string {
+  const hash = createHash("sha256").update(`${namespace}:${name}`).digest();
+  hash[6] = (hash[6] & 0x0f) | 0x40; // version 4
+  hash[8] = (hash[8] & 0x3f) | 0x80; // variant 10xx
+  const hex = hash.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
 
 /** tool_use のカテゴリを分類する (BR-01) */
 export function categorize(
@@ -220,13 +233,24 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
     }
   }
 
+  // model が空のイベントを後続の assistant レスポンスから逆引きで埋める
+  const fallbackModel = Object.keys(byModel)[0] ?? "";
+  if (fallbackModel) {
+    for (const event of events) {
+      if (!event.model) event.model = fallbackModel;
+    }
+  }
+
+  // model が空のまま残ったイベントは除外（サーバー側 min(1) バリデーション対策）
+  const validEvents = events.filter((e) => e.model);
+
   // builtin を後回しにして上限内に収める
-  const truncated = truncateEvents(events, MAX_EVENTS);
+  const truncated = truncateEvents(validEvents, MAX_EVENTS);
 
   if (!sessionId || truncated.length === 0) return null;
 
-  // subagent は親と sessionId が同じなので agentId で区別する
-  const effectiveSessionId = agentId ? `${sessionId}:${agentId}` : sessionId;
+  // subagent は親と sessionId が同じなので agentId から deterministic UUID を生成
+  const effectiveSessionId = agentId ? deterministicUuid(sessionId, agentId) : sessionId;
 
   // コスト算出 (BR-02)
   let totalCost = 0;

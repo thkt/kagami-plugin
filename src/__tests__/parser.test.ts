@@ -4,12 +4,40 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   categorize,
+  deterministicUuid,
   extractBashToolName,
   extractSkillName,
   parseTranscript,
   truncateEvents,
 } from "../parser";
 import type { ToolEventInput } from "../types";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+describe("deterministicUuid", () => {
+  test("produces valid UUID v4 format", () => {
+    const result = deterministicUuid("550e8400-e29b-41d4-a716-446655440000", "agent-1");
+    expect(result).toMatch(UUID_RE);
+  });
+
+  test("is deterministic (same inputs → same output)", () => {
+    const a = deterministicUuid("550e8400-e29b-41d4-a716-446655440000", "agent-1");
+    const b = deterministicUuid("550e8400-e29b-41d4-a716-446655440000", "agent-1");
+    expect(a).toBe(b);
+  });
+
+  test("different inputs → different UUIDs", () => {
+    const a = deterministicUuid("550e8400-e29b-41d4-a716-446655440000", "agent-1");
+    const b = deterministicUuid("550e8400-e29b-41d4-a716-446655440000", "agent-2");
+    expect(a).not.toBe(b);
+  });
+
+  test("differs from original namespace UUID", () => {
+    const ns = "550e8400-e29b-41d4-a716-446655440000";
+    const result = deterministicUuid(ns, "agent-1");
+    expect(result).not.toBe(ns);
+  });
+});
 
 describe("categorize", () => {
   test("Skill → skill", () => {
@@ -290,7 +318,7 @@ describe("parseTranscript", () => {
     expect(result!.tokenSummary.totalEstimatedCostUsd).toBeGreaterThan(0);
   });
 
-  test("produces events for isMeta-only session (no tool_use)", async () => {
+  test("returns null for isMeta-only session without assistant response (unknown model)", async () => {
     const path = createJsonlFile([
       {
         type: "user",
@@ -308,10 +336,61 @@ describe("parseTranscript", () => {
     ]);
 
     const result = await parseTranscript(path);
+    expect(result).toBeNull();
+  });
+
+  test("backfills empty model on skill events from subsequent assistant response", async () => {
+    const path = createJsonlFile([
+      {
+        type: "user",
+        sessionId: "model-backfill",
+        cwd: "/tmp",
+        timestamp: "2026-02-28T10:00:00Z",
+        isMeta: true,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "# /commit - Git Commit\n\nAnalyze..." }],
+        },
+      },
+      {
+        type: "assistant",
+        sessionId: "model-backfill",
+        timestamp: "2026-02-28T10:00:01Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-6",
+          usage: { input_tokens: 100, output_tokens: 50 },
+          content: [
+            { type: "tool_use", id: "tu1", name: "Read", input: { file_path: "/tmp/a.ts" } },
+          ],
+        },
+      },
+    ]);
+
+    const result = await parseTranscript(path);
     expect(result).not.toBeNull();
-    expect(result!.events).toHaveLength(1);
+    expect(result!.events).toHaveLength(2);
     expect(result!.events[0].category).toBe("skill");
-    expect(result!.events[0].toolName).toBe("audit");
+    expect(result!.events[0].model).toBe("claude-opus-4-6");
+  });
+
+  test("filters out events with empty model when no assistant message exists", async () => {
+    const path = createJsonlFile([
+      {
+        type: "user",
+        sessionId: "no-assistant",
+        cwd: "/tmp",
+        timestamp: "2026-02-28T10:00:00Z",
+        isMeta: true,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "# /audit - Code Audit\n\nOrchestrate..." }],
+        },
+      },
+    ]);
+
+    const result = await parseTranscript(path);
+    expect(result).toBeNull();
   });
 
   test("returns null for empty sessions", async () => {
@@ -511,7 +590,7 @@ describe("parseTranscript", () => {
     expect(result!.events[1].toolInput).toBeNull();
   });
 
-  test("composes sessionId with agentId for subagent JSONL", async () => {
+  test("generates deterministic UUID sessionId for subagent JSONL", async () => {
     const path = createJsonlFile([
       {
         type: "user",
@@ -547,7 +626,9 @@ describe("parseTranscript", () => {
 
     const result = await parseTranscript(path);
     expect(result).not.toBeNull();
-    expect(result!.sessionId).toBe("parent-session-abc:a14aaf1");
+    expect(result!.sessionId).toMatch(UUID_RE);
+    expect(result!.sessionId).not.toBe("parent-session-abc");
+    expect(result!.sessionId).toBe(deterministicUuid("parent-session-abc", "a14aaf1"));
     expect(result!.events).toHaveLength(1);
     expect(result!.events[0].category).toBe("mcp");
   });

@@ -24,8 +24,10 @@ function sendPayload(apiUrl, apiKey, payload, timeoutMs) {
 }
 
 // src/parser.ts
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
+import { basename } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 
@@ -48,6 +50,38 @@ function estimateCost(model, tokens) {
 
 // src/parser.ts
 var execFileAsync = promisify(execFile);
+var BUILTIN_TOOLS = new Set([
+  "Read",
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "Grep",
+  "Glob",
+  "LS",
+  "Bash",
+  "WebSearch",
+  "WebFetch",
+  "LSP",
+  "ToolSearch",
+  "TodoRead",
+  "TodoWrite",
+  "TaskCreate",
+  "TaskUpdate",
+  "TaskGet",
+  "TaskList",
+  "AskUserQuestion",
+  "EnterPlanMode",
+  "ExitPlanMode",
+  "EnterWorktree"
+]);
+var MAX_EVENTS = 500;
+function deterministicUuid(namespace, name) {
+  const hash = createHash("sha256").update(`${namespace}:${name}`).digest();
+  hash[6] = hash[6] & 15 | 64;
+  hash[8] = hash[8] & 63 | 128;
+  const hex = hash.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
 function categorize(name, input) {
   if (name === "Skill")
     return "skill";
@@ -55,7 +89,17 @@ function categorize(name, input) {
     return "subagent";
   if (name.startsWith("mcp__"))
     return "mcp";
+  if (BUILTIN_TOOLS.has(name))
+    return "builtin";
   return null;
+}
+var RE_BASH_CMD = /(?:\w+=\S+\s+)*(\S+)/;
+function extractBashToolName(command) {
+  const m = command.match(RE_BASH_CMD);
+  if (!m)
+    return "Bash";
+  const name = basename(m[1]);
+  return name === "." ? "Bash" : name || "Bash";
 }
 function resolveToolName(name, input) {
   if (name === "Skill" && typeof input.skill === "string") {
@@ -63,6 +107,9 @@ function resolveToolName(name, input) {
   }
   if (name === "Agent" && typeof input.subagent_type === "string") {
     return input.subagent_type;
+  }
+  if (name === "Bash" && typeof input.command === "string") {
+    return extractBashToolName(input.command);
   }
   return name;
 }
@@ -162,27 +209,42 @@ async function parseTranscript(filePath) {
       continue;
     const toolUses = extractToolUses(msg.content);
     const timestamp = line.timestamp ?? lastTimestamp;
+    let divisor = 0;
+    for (const tu of toolUses) {
+      if (categorize(tu.name, tu.input) !== null)
+        divisor++;
+    }
+    if (divisor === 0)
+      divisor = 1;
     for (const tu of toolUses) {
       const category = categorize(tu.name, tu.input);
       if (!category)
         continue;
-      const toolName = resolveToolName(tu.name, tu.input);
       events.push({
         category,
-        toolName,
-        toolInput: tu.input,
+        toolName: resolveToolName(tu.name, tu.input),
+        toolInput: category === "builtin" ? null : tu.input,
         model,
-        inputTokens: msg.usage?.input_tokens ?? 0,
-        outputTokens: msg.usage?.output_tokens ?? 0,
-        cacheCreationTokens: msg.usage?.cache_creation_input_tokens ?? 0,
-        cacheReadTokens: msg.usage?.cache_read_input_tokens ?? 0,
+        inputTokens: Math.round((msg.usage?.input_tokens ?? 0) / divisor),
+        outputTokens: Math.round((msg.usage?.output_tokens ?? 0) / divisor),
+        cacheCreationTokens: Math.round((msg.usage?.cache_creation_input_tokens ?? 0) / divisor),
+        cacheReadTokens: Math.round((msg.usage?.cache_read_input_tokens ?? 0) / divisor),
         timestamp
       });
     }
   }
-  if (!sessionId || events.length === 0)
+  const fallbackModel = Object.keys(byModel)[0] ?? "";
+  if (fallbackModel) {
+    for (const event of events) {
+      if (!event.model)
+        event.model = fallbackModel;
+    }
+  }
+  const validEvents = events.filter((e) => e.model);
+  const truncated = truncateEvents(validEvents, MAX_EVENTS);
+  if (!sessionId || truncated.length === 0)
     return null;
-  const effectiveSessionId = agentId ? `${sessionId}:${agentId}` : sessionId;
+  const effectiveSessionId = agentId ? deterministicUuid(sessionId, agentId) : sessionId;
   let totalCost = 0;
   for (const [model, tokens] of Object.entries(byModel)) {
     tokens.estimatedCostUsd = estimateCost(model, tokens);
@@ -197,7 +259,7 @@ async function parseTranscript(filePath) {
     ccVersion: "",
     sessionStartedAt: firstTimestamp,
     sessionEndedAt: lastTimestamp,
-    events,
+    events: truncated,
     tokenSummary: {
       byModel,
       totalEstimatedCostUsd: totalCost
@@ -220,6 +282,26 @@ async function getGitUserEmail(cwd) {
 }
 function getUserFallback() {
   return process.env.USER ?? process.env.USERNAME ?? "unknown";
+}
+function truncateEvents(events, max) {
+  if (events.length <= max)
+    return events;
+  const builtinIndices = [];
+  for (let i = 0;i < events.length; i++) {
+    if (events[i].category === "builtin")
+      builtinIndices.push(i);
+  }
+  const builtinKeep = Math.max(0, max - (events.length - builtinIndices.length));
+  let dropPtr = builtinKeep;
+  const result = [];
+  for (let i = 0;i < events.length && result.length < max; i++) {
+    if (dropPtr < builtinIndices.length && builtinIndices[dropPtr] === i) {
+      dropPtr++;
+      continue;
+    }
+    result.push(events[i]);
+  }
+  return result;
 }
 
 // src/stdin.ts

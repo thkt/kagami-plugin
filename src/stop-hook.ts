@@ -19,7 +19,7 @@ interface StopHookInput {
   stop_hook_active?: boolean;
 }
 
-const API_URL = process.env.KAGAMI_API_URL;
+const API_URL = process.env.KAGAMI_API_URL ?? "";
 const API_KEY = process.env.KAGAMI_API_KEY;
 
 if (!API_URL) process.exit(0);
