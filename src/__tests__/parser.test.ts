@@ -167,6 +167,26 @@ describe("extractBashToolName", () => {
   test("whitespace only → Bash fallback", () => {
     expect(extractBashToolName("   ")).toBe("Bash");
   });
+
+  test("comment (#) → Bash fallback", () => {
+    expect(extractBashToolName("# this is a comment")).toBe("Bash");
+  });
+
+  test("chained (&&) → Bash fallback", () => {
+    expect(extractBashToolName("&& git status")).toBe("Bash");
+  });
+
+  test("flag (-u) → Bash fallback", () => {
+    expect(extractBashToolName("-u origin main")).toBe("Bash");
+  });
+
+  test("brace ({) → Bash fallback", () => {
+    expect(extractBashToolName("{ echo hello; }")).toBe("Bash");
+  });
+
+  test("bracket ([) → Bash fallback", () => {
+    expect(extractBashToolName("[ -f file.txt ]")).toBe("Bash");
+  });
 });
 
 describe("truncateEvents", () => {

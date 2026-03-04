@@ -74,12 +74,15 @@ export function categorize(
 }
 
 const RE_BASH_CMD = /(?:\w+=\S+\s+)*(\S+)/;
+/** コマンド名として妥当: 英字・数字・ハイフン・アンダースコア・ドットで始まる */
+const RE_VALID_CMD = /^[a-zA-Z0-9._]/;
 
 export function extractBashToolName(command: string): string {
   const m = command.match(RE_BASH_CMD);
   if (!m) return "Bash";
   const name = basename(m[1]);
-  return name === "." ? "Bash" : name || "Bash";
+  if (!name || name === "." || !RE_VALID_CMD.test(name)) return "Bash";
+  return name;
 }
 
 function resolveToolName(name: string, input: Record<string, unknown>): string {

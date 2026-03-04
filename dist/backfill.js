@@ -93,12 +93,15 @@ function categorize(name, input) {
   return null;
 }
 var RE_BASH_CMD = /(?:\w+=\S+\s+)*(\S+)/;
+var RE_VALID_CMD = /^[a-zA-Z0-9._]/;
 function extractBashToolName(command) {
   const m = command.match(RE_BASH_CMD);
   if (!m)
     return "Bash";
   const name = basename(m[1]);
-  return name === "." ? "Bash" : name || "Bash";
+  if (!name || name === "." || !RE_VALID_CMD.test(name))
+    return "Bash";
+  return name;
 }
 function resolveToolName(name, input) {
   if (name === "Skill" && typeof input.skill === "string") {
