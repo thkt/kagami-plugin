@@ -3,7 +3,7 @@ var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // src/startup-send.ts
 import { execFile as execFile2 } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify as promisify2 } from "node:util";
@@ -321,36 +321,27 @@ async function readStdin() {
 // src/startup-send.ts
 var execFileAsync2 = promisify2(execFile2);
 var MAX_AGE_MS = 48 * 60 * 60 * 1000;
-function findRecentJsonlFiles(dir, currentTranscript) {
+async function findRecentJsonlFiles(dir, currentTranscript) {
   const now = Date.now();
   const resolved = currentTranscript ? resolve(currentTranscript) : "";
-  const files = [];
-  function walk(current) {
-    let entries;
-    try {
-      entries = readdirSync(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const fullPath = join(current, entry.name);
-      if (entry.isDirectory()) {
-        walk(fullPath);
-      } else if (entry.name.endsWith(".jsonl")) {
-        if (resolve(fullPath) === resolved)
-          continue;
-        try {
-          const { mtimeMs } = statSync(fullPath);
-          if (now - mtimeMs <= MAX_AGE_MS)
-            files.push(fullPath);
-        } catch {
-          continue;
-        }
-      }
-    }
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true, recursive: true });
+  } catch {
+    return [];
   }
-  walk(dir);
-  return files;
+  const checks = await Promise.all(entries.filter((e) => !e.isDirectory() && e.name.endsWith(".jsonl")).map(async (entry) => {
+    const fullPath = join(entry.parentPath, entry.name);
+    if (resolve(fullPath) === resolved)
+      return null;
+    try {
+      const { mtimeMs } = await stat(fullPath);
+      return now - mtimeMs <= MAX_AGE_MS ? fullPath : null;
+    } catch {
+      return null;
+    }
+  }));
+  return checks.filter((f) => f !== null);
 }
 async function main() {
   const API_URL = process.env.KAGAMI_API_URL;
@@ -367,11 +358,11 @@ async function main() {
   const currentTranscript = input.transcript_path ?? "";
   const projectsDir = join(homedir(), ".claude", "projects");
   try {
-    statSync(projectsDir);
+    await stat(projectsDir);
   } catch {
     process.exit(0);
   }
-  const files = findRecentJsonlFiles(projectsDir, currentTranscript);
+  const files = await findRecentJsonlFiles(projectsDir, currentTranscript);
   if (files.length === 0)
     process.exit(0);
   let ccVersion = "unknown";
@@ -379,15 +370,17 @@ async function main() {
     const { stdout } = await execFileAsync2("claude", ["--version"]);
     ccVersion = stdout.trim();
   } catch {}
-  for (const file of files) {
-    try {
-      const payload = await parseTranscript(file);
-      if (!payload)
-        continue;
-      payload.ccVersion = ccVersion;
-      payload.source = "startup-send";
-      await sendPayload(API_URL, API_KEY, payload, 8000);
-    } catch {}
+  const results = await Promise.allSettled(files.map(async (file) => {
+    const payload = await parseTranscript(file);
+    if (!payload)
+      return;
+    payload.ccVersion = ccVersion;
+    payload.source = "startup-send";
+    await sendPayload(API_URL, API_KEY, payload, 8000);
+  }));
+  const failed = results.filter((r) => r.status === "rejected");
+  if (failed.length > 0) {
+    console.error(`kagami: ${failed.length}/${results.length} startup-send failed`);
   }
 }
 if (__require.main == __require.module)

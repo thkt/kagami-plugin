@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // src/backfill.ts
-import { readdirSync, statSync } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -308,30 +308,24 @@ function truncateEvents(events, max) {
 }
 
 // src/backfill.ts
-var API_URL = process.env.KAGAMI_API_URL;
-var API_KEY = process.env.KAGAMI_API_KEY;
-function findJsonlFiles(dir) {
-  const files = [];
-  function walk(current) {
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const fullPath = join(current, entry.name);
-      if (entry.isDirectory()) {
-        walk(fullPath);
-      } else if (entry.name.endsWith(".jsonl")) {
-        files.push(fullPath);
-      }
-    }
+async function findJsonlFiles(dir) {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true, recursive: true });
+  } catch {
+    return [];
   }
-  walk(dir);
-  return files;
+  return entries.filter((e) => !e.isDirectory() && e.name.endsWith(".jsonl")).map((e) => join(e.parentPath, e.name));
 }
 async function main() {
+  const API_URL = process.env.KAGAMI_API_URL;
+  const API_KEY = process.env.KAGAMI_API_KEY;
   const args = process.argv.slice(2);
   const dryRun = args.includes("--dry-run");
   const dirArg = args.find((a) => !a.startsWith("--"));
   const targetDir = dirArg ?? join(homedir(), ".claude", "projects");
   try {
-    statSync(targetDir);
+    await stat(targetDir);
   } catch {
     console.error(`Directory not found: ${targetDir}`);
     process.exit(1);
@@ -343,14 +337,14 @@ async function main() {
   console.log(`Scanning: ${targetDir}`);
   console.log(`Mode: ${dryRun ? "dry-run (no POST)" : "live"}`);
   console.log();
-  const files = findJsonlFiles(targetDir);
+  const files = await findJsonlFiles(targetDir);
   console.log(`Found ${files.length} JSONL files`);
   console.log();
   let success = 0;
   let skipped = 0;
   let failed = 0;
   for (const file of files) {
-    const size = statSync(file).size;
+    const { size } = await stat(file);
     const sizeMb = (size / 1024 / 1024).toFixed(1);
     process.stdout.write(`  ${file} (${sizeMb}MB) ... `);
     try {
@@ -367,7 +361,7 @@ async function main() {
         success++;
         continue;
       }
-      const res = await sendPayload(API_URL, API_KEY, payload);
+      const res = await sendPayload(API_URL, API_KEY, payload, 30000);
       if (res.ok) {
         console.log(`sent (${payload.events.length} events)`);
         success++;
@@ -383,4 +377,8 @@ async function main() {
   console.log();
   console.log(`Done: ${success} sent, ${skipped} skipped, ${failed} failed`);
 }
-main();
+if (__require.main == __require.module)
+  main();
+export {
+  findJsonlFiles
+};

@@ -6,7 +6,7 @@
  * サーバー側で sessionId の重複排除を行う前提。
  */
 import { execFile } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -24,36 +24,36 @@ interface SessionStartInput {
 const MAX_AGE_MS = 48 * 60 * 60 * 1000; // 48h
 
 /** 直近 MAX_AGE_MS 以内の JSONL ファイルを再帰検索する（currentTranscript は除外） */
-export function findRecentJsonlFiles(dir: string, currentTranscript: string): string[] {
+export async function findRecentJsonlFiles(
+  dir: string,
+  currentTranscript: string,
+): Promise<string[]> {
   const now = Date.now();
   const resolved = currentTranscript ? resolve(currentTranscript) : "";
-  const files: string[] = [];
 
-  function walk(current: string) {
-    let entries;
-    try {
-      entries = readdirSync(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const fullPath = join(current, entry.name);
-      if (entry.isDirectory()) {
-        walk(fullPath);
-      } else if (entry.name.endsWith(".jsonl")) {
-        if (resolve(fullPath) === resolved) continue;
-        try {
-          const { mtimeMs } = statSync(fullPath);
-          if (now - mtimeMs <= MAX_AGE_MS) files.push(fullPath);
-        } catch {
-          continue;
-        }
-      }
-    }
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true, recursive: true });
+  } catch {
+    return [];
   }
 
-  walk(dir);
-  return files;
+  const checks = await Promise.all(
+    entries
+      .filter((e) => !e.isDirectory() && e.name.endsWith(".jsonl"))
+      .map(async (entry) => {
+        const fullPath = join(entry.parentPath, entry.name);
+        if (resolve(fullPath) === resolved) return null;
+        try {
+          const { mtimeMs } = await stat(fullPath);
+          return now - mtimeMs <= MAX_AGE_MS ? fullPath : null;
+        } catch {
+          return null;
+        }
+      }),
+  );
+
+  return checks.filter((f): f is string => f !== null);
 }
 
 async function main() {
@@ -73,12 +73,12 @@ async function main() {
   const projectsDir = join(homedir(), ".claude", "projects");
 
   try {
-    statSync(projectsDir);
+    await stat(projectsDir);
   } catch {
     process.exit(0);
   }
 
-  const files = findRecentJsonlFiles(projectsDir, currentTranscript);
+  const files = await findRecentJsonlFiles(projectsDir, currentTranscript);
   if (files.length === 0) process.exit(0);
 
   let ccVersion = "unknown";
@@ -89,16 +89,18 @@ async function main() {
     // ignore: claude CLI not found
   }
 
-  for (const file of files) {
-    try {
+  const results = await Promise.allSettled(
+    files.map(async (file) => {
       const payload = await parseTranscript(file);
-      if (!payload) continue;
+      if (!payload) return;
       payload.ccVersion = ccVersion;
       payload.source = "startup-send";
       await sendPayload(API_URL, API_KEY, payload, 8000);
-    } catch {
-      // skip failed files
-    }
+    }),
+  );
+  const failed = results.filter((r) => r.status === "rejected");
+  if (failed.length > 0) {
+    console.error(`kagami: ${failed.length}/${results.length} startup-send failed`);
   }
 }
 
