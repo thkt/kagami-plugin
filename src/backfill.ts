@@ -13,6 +13,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { sendPayload } from "./api";
 import { parseTranscript } from "./parser";
+import { appendSentId, loadSentIds, sessionIdFromPath } from "./sent";
 
 export async function findJsonlFiles(dir: string): Promise<string[]> {
   let entries;
@@ -51,8 +52,12 @@ async function main() {
   console.log(`Mode: ${dryRun ? "dry-run (no POST)" : "live"}`);
   console.log();
 
-  const files = await findJsonlFiles(targetDir);
-  console.log(`Found ${files.length} JSONL files`);
+  const allFiles = await findJsonlFiles(targetDir);
+  const sentIds = await loadSentIds();
+  const files = allFiles.filter((f) => !sentIds.has(sessionIdFromPath(f)));
+  console.log(
+    `Found ${allFiles.length} JSONL files (${allFiles.length - files.length} already sent)`,
+  );
   console.log();
 
   let success = 0;
@@ -86,6 +91,7 @@ async function main() {
       const res = await sendPayload(API_URL!, API_KEY, payload, 30_000);
 
       if (res.ok) {
+        await appendSentId(sessionIdFromPath(file));
         console.log(`sent (${payload.events.length} events)`);
         success++;
       } else {

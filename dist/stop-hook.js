@@ -306,6 +306,38 @@ function truncateEvents(events, max) {
   return result;
 }
 
+// src/sent.ts
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename as basename2, dirname, join } from "node:path";
+var SENT_FILE = join(homedir(), ".claude", "plugins", "kagami", "sent.txt");
+var MAX_ENTRIES = 1e4;
+async function loadSentIds() {
+  try {
+    const content = await readFile(SENT_FILE, "utf-8");
+    const ids = content.split(`
+`).filter((line) => line.length > 0);
+    if (ids.length > MAX_ENTRIES) {
+      const trimmed = ids.slice(-MAX_ENTRIES);
+      await writeFile(SENT_FILE, trimmed.join(`
+`) + `
+`).catch(() => {});
+      return new Set(trimmed);
+    }
+    return new Set(ids);
+  } catch {
+    return new Set;
+  }
+}
+var sessionIdFromPath = (file) => basename2(file, ".jsonl");
+async function appendSentId(sessionId) {
+  try {
+    await mkdir(dirname(SENT_FILE), { recursive: true });
+    await appendFile(SENT_FILE, `${sessionId}
+`);
+  } catch {}
+}
+
 // src/stdin.ts
 async function readStdin() {
   const chunks = [];
@@ -334,6 +366,7 @@ async function main() {
   }
   const payload = await parseTranscript(input.transcript_path);
   if (!payload) {
+    await appendSentId(input.session_id);
     process.exit(0);
   }
   try {
@@ -344,7 +377,9 @@ async function main() {
   }
   payload.source = "stop";
   try {
-    await sendPayload(API_URL, API_KEY, payload, 8000);
+    const res = await sendPayload(API_URL, API_KEY, payload, 8000);
+    if (res.ok)
+      await appendSentId(input.session_id);
   } catch {}
 }
 main();

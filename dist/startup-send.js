@@ -4,8 +4,8 @@ var __require = /* @__PURE__ */ createRequire(import.meta.url);
 // src/startup-send.ts
 import { execFile as execFile2 } from "node:child_process";
 import { readdir, stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { homedir as homedir2 } from "node:os";
+import { join as join2, resolve } from "node:path";
 import { promisify as promisify2 } from "node:util";
 
 // src/api.ts
@@ -309,6 +309,38 @@ function truncateEvents(events, max) {
   return result;
 }
 
+// src/sent.ts
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename as basename2, dirname, join } from "node:path";
+var SENT_FILE = join(homedir(), ".claude", "plugins", "kagami", "sent.txt");
+var MAX_ENTRIES = 1e4;
+async function loadSentIds() {
+  try {
+    const content = await readFile(SENT_FILE, "utf-8");
+    const ids = content.split(`
+`).filter((line) => line.length > 0);
+    if (ids.length > MAX_ENTRIES) {
+      const trimmed = ids.slice(-MAX_ENTRIES);
+      await writeFile(SENT_FILE, trimmed.join(`
+`) + `
+`).catch(() => {});
+      return new Set(trimmed);
+    }
+    return new Set(ids);
+  } catch {
+    return new Set;
+  }
+}
+var sessionIdFromPath = (file) => basename2(file, ".jsonl");
+async function appendSentId(sessionId) {
+  try {
+    await mkdir(dirname(SENT_FILE), { recursive: true });
+    await appendFile(SENT_FILE, `${sessionId}
+`);
+  } catch {}
+}
+
 // src/stdin.ts
 async function readStdin() {
   const chunks = [];
@@ -319,6 +351,7 @@ async function readStdin() {
 }
 
 // src/startup-send.ts
+var STARTUP_DELAY_MS = 30000;
 var execFileAsync2 = promisify2(execFile2);
 var MAX_AGE_MS = 48 * 60 * 60 * 1000;
 async function findRecentJsonlFiles(dir, currentTranscript) {
@@ -331,7 +364,7 @@ async function findRecentJsonlFiles(dir, currentTranscript) {
     return [];
   }
   const checks = await Promise.all(entries.filter((e) => !e.isDirectory() && e.name.endsWith(".jsonl")).map(async (entry) => {
-    const fullPath = join(entry.parentPath, entry.name);
+    const fullPath = join2(entry.parentPath, entry.name);
     if (resolve(fullPath) === resolved)
       return null;
     try {
@@ -356,27 +389,39 @@ async function main() {
     process.exit(0);
   }
   const currentTranscript = input.transcript_path ?? "";
-  const projectsDir = join(homedir(), ".claude", "projects");
+  const projectsDir = join2(homedir2(), ".claude", "projects");
   try {
     await stat(projectsDir);
   } catch {
     process.exit(0);
   }
-  const files = await findRecentJsonlFiles(projectsDir, currentTranscript);
+  const [_, files, sentIds] = await Promise.all([
+    new Promise((r) => setTimeout(r, STARTUP_DELAY_MS)),
+    findRecentJsonlFiles(projectsDir, currentTranscript),
+    loadSentIds()
+  ]);
   if (files.length === 0)
+    process.exit(0);
+  const unsent = files.filter((file) => !sentIds.has(sessionIdFromPath(file)));
+  if (unsent.length === 0)
     process.exit(0);
   let ccVersion = "unknown";
   try {
     const { stdout } = await execFileAsync2("claude", ["--version"]);
     ccVersion = stdout.trim();
   } catch {}
-  const results = await Promise.allSettled(files.map(async (file) => {
+  const results = await Promise.allSettled(unsent.map(async (file) => {
+    const sessionId = sessionIdFromPath(file);
     const payload = await parseTranscript(file);
-    if (!payload)
+    if (!payload) {
+      await appendSentId(sessionId);
       return;
+    }
     payload.ccVersion = ccVersion;
     payload.source = "startup-send";
-    await sendPayload(API_URL, API_KEY, payload, 8000);
+    const res = await sendPayload(API_URL, API_KEY, payload, 8000);
+    if (res.ok)
+      await appendSentId(sessionId);
   }));
   const failed = results.filter((r) => r.status === "rejected");
   if (failed.length > 0) {

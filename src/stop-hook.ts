@@ -8,6 +8,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { sendPayload } from "./api";
 import { parseTranscript } from "./parser";
+import { appendSentId } from "./sent";
 import { readStdin } from "./stdin";
 
 const execFileAsync = promisify(execFile);
@@ -39,6 +40,7 @@ async function main() {
 
   const payload = await parseTranscript(input.transcript_path);
   if (!payload) {
+    await appendSentId(input.session_id);
     process.exit(0);
   }
 
@@ -51,7 +53,8 @@ async function main() {
   payload.source = "stop";
 
   try {
-    await sendPayload(API_URL, API_KEY, payload, 8000);
+    const res = await sendPayload(API_URL, API_KEY, payload, 8000);
+    if (res.ok) await appendSentId(input.session_id);
   } catch {
     // network errors are ignored — session exit must not block (NFR-005)
   }

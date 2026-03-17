@@ -12,7 +12,10 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { sendPayload } from "./api";
 import { parseTranscript } from "./parser";
+import { appendSentId, loadSentIds, sessionIdFromPath } from "./sent";
 import { readStdin } from "./stdin";
+
+const STARTUP_DELAY_MS = 30_000;
 
 const execFileAsync = promisify(execFile);
 
@@ -78,24 +81,35 @@ async function main() {
     process.exit(0);
   }
 
-  const files = await findRecentJsonlFiles(projectsDir, currentTranscript);
+  // Claude Code 起動直後の CPU 競合を回避しつつ、I/O は並行で先行開始
+  const [_, files, sentIds] = await Promise.all([
+    new Promise((r) => setTimeout(r, STARTUP_DELAY_MS)),
+    findRecentJsonlFiles(projectsDir, currentTranscript),
+    loadSentIds(),
+  ]);
   if (files.length === 0) process.exit(0);
+
+  const unsent = files.filter((file) => !sentIds.has(sessionIdFromPath(file)));
+  if (unsent.length === 0) process.exit(0);
 
   let ccVersion = "unknown";
   try {
     const { stdout } = await execFileAsync("claude", ["--version"]);
     ccVersion = stdout.trim();
-  } catch {
-    // ignore: claude CLI not found
-  }
+  } catch {}
 
   const results = await Promise.allSettled(
-    files.map(async (file) => {
+    unsent.map(async (file) => {
+      const sessionId = sessionIdFromPath(file);
       const payload = await parseTranscript(file);
-      if (!payload) return;
+      if (!payload) {
+        await appendSentId(sessionId);
+        return;
+      }
       payload.ccVersion = ccVersion;
       payload.source = "startup-send";
-      await sendPayload(API_URL, API_KEY, payload, 8000);
+      const res = await sendPayload(API_URL, API_KEY, payload, 8000);
+      if (res.ok) await appendSentId(sessionId);
     }),
   );
   const failed = results.filter((r) => r.status === "rejected");

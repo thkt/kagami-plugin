@@ -3,8 +3,8 @@ var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // src/backfill.ts
 import { readdir, stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { homedir as homedir2 } from "node:os";
+import { join as join2 } from "node:path";
 
 // src/api.ts
 function sendPayload(apiUrl, apiKey, payload, timeoutMs) {
@@ -307,6 +307,38 @@ function truncateEvents(events, max) {
   return result;
 }
 
+// src/sent.ts
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename as basename2, dirname, join } from "node:path";
+var SENT_FILE = join(homedir(), ".claude", "plugins", "kagami", "sent.txt");
+var MAX_ENTRIES = 1e4;
+async function loadSentIds() {
+  try {
+    const content = await readFile(SENT_FILE, "utf-8");
+    const ids = content.split(`
+`).filter((line) => line.length > 0);
+    if (ids.length > MAX_ENTRIES) {
+      const trimmed = ids.slice(-MAX_ENTRIES);
+      await writeFile(SENT_FILE, trimmed.join(`
+`) + `
+`).catch(() => {});
+      return new Set(trimmed);
+    }
+    return new Set(ids);
+  } catch {
+    return new Set;
+  }
+}
+var sessionIdFromPath = (file) => basename2(file, ".jsonl");
+async function appendSentId(sessionId) {
+  try {
+    await mkdir(dirname(SENT_FILE), { recursive: true });
+    await appendFile(SENT_FILE, `${sessionId}
+`);
+  } catch {}
+}
+
 // src/backfill.ts
 async function findJsonlFiles(dir) {
   let entries;
@@ -315,7 +347,7 @@ async function findJsonlFiles(dir) {
   } catch {
     return [];
   }
-  return entries.filter((e) => !e.isDirectory() && e.name.endsWith(".jsonl")).map((e) => join(e.parentPath, e.name));
+  return entries.filter((e) => !e.isDirectory() && e.name.endsWith(".jsonl")).map((e) => join2(e.parentPath, e.name));
 }
 async function main() {
   const API_URL = process.env.KAGAMI_API_URL;
@@ -323,7 +355,7 @@ async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes("--dry-run");
   const dirArg = args.find((a) => !a.startsWith("--"));
-  const targetDir = dirArg ?? join(homedir(), ".claude", "projects");
+  const targetDir = dirArg ?? join2(homedir2(), ".claude", "projects");
   try {
     await stat(targetDir);
   } catch {
@@ -337,8 +369,10 @@ async function main() {
   console.log(`Scanning: ${targetDir}`);
   console.log(`Mode: ${dryRun ? "dry-run (no POST)" : "live"}`);
   console.log();
-  const files = await findJsonlFiles(targetDir);
-  console.log(`Found ${files.length} JSONL files`);
+  const allFiles = await findJsonlFiles(targetDir);
+  const sentIds = await loadSentIds();
+  const files = allFiles.filter((f) => !sentIds.has(sessionIdFromPath(f)));
+  console.log(`Found ${allFiles.length} JSONL files (${allFiles.length - files.length} already sent)`);
   console.log();
   let success = 0;
   let skipped = 0;
@@ -363,6 +397,7 @@ async function main() {
       }
       const res = await sendPayload(API_URL, API_KEY, payload, 30000);
       if (res.ok) {
+        await appendSentId(sessionIdFromPath(file));
         console.log(`sent (${payload.events.length} events)`);
         success++;
       } else {
