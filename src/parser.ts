@@ -8,6 +8,7 @@ import { estimateCost } from "./cost";
 import type {
   ContentBlock,
   EventPayload,
+  HookSummaryInput,
   ModelTokens,
   ToolEventInput,
   TranscriptLine,
@@ -133,6 +134,7 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
   let currentModel = "";
   let userMessages = 0;
   let assistantMessages = 0;
+  const hookCounts = new Map<string, HookSummaryInput>();
 
   const rl = createInterface({
     input: createReadStream(filePath),
@@ -154,6 +156,20 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
     if (line.timestamp) {
       if (!firstTimestamp) firstTimestamp = line.timestamp;
       lastTimestamp = line.timestamp;
+    }
+
+    // hook_progress 集計
+    if (line.type === "progress" && line.data?.type === "hook_progress") {
+      const { hookEvent, hookName, command } = line.data;
+      if (hookEvent && hookName && command) {
+        const key = `${hookEvent}|${hookName}|${command}`;
+        const existing = hookCounts.get(key);
+        if (existing) {
+          existing.count++;
+        } else {
+          hookCounts.set(key, { hookEvent, hookName, command, count: 1 });
+        }
+      }
     }
 
     // メッセージ数カウント（isMeta はシステム注入なので除外）
@@ -273,6 +289,7 @@ export async function parseTranscript(filePath: string): Promise<EventPayload | 
     sessionStartedAt: firstTimestamp,
     sessionEndedAt: lastTimestamp,
     events: truncated,
+    hookSummaries: [...hookCounts.values()],
     tokenSummary: {
       byModel,
       totalEstimatedCostUsd: totalCost,

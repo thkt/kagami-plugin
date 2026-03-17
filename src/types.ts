@@ -1,3 +1,10 @@
+export interface HookSummaryInput {
+  hookEvent: string;
+  hookName: string;
+  command: string;
+  count: number;
+}
+
 /** Plugin → API 送信ペイロード */
 export interface EventPayload {
   sessionId: string;
@@ -10,6 +17,7 @@ export interface EventPayload {
   sessionStartedAt: string;
   sessionEndedAt: string;
   events: ToolEventInput[];
+  hookSummaries: HookSummaryInput[];
   tokenSummary: TokenSummary;
   messageSummary: MessageSummary;
 }
@@ -55,6 +63,13 @@ export interface TranscriptLine {
   agentId?: string;
   /** スキル展開やメタ情報の注入を示すフラグ */
   isMeta?: boolean;
+  /** progress エントリの data フィールド */
+  data?: {
+    type?: string;
+    hookEvent?: string;
+    hookName?: string;
+    command?: string;
+  };
   message?: {
     role: string;
     model?: string;

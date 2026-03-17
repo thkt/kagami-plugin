@@ -714,6 +714,140 @@ describe("parseTranscript", () => {
     expect(result!.sessionId).toBe("parent-session-abc");
   });
 
+  test("T-001: aggregates hook_progress entries into hookSummaries", async () => {
+    const path = createJsonlFile([
+      {
+        type: "user",
+        sessionId: "hook-session",
+        cwd: "/tmp/project",
+        timestamp: "2026-03-09T09:08:00Z",
+        message: { role: "user", content: [{ type: "text", text: "hello" }] },
+      },
+      {
+        type: "progress",
+        data: {
+          type: "hook_progress",
+          hookEvent: "PreToolUse",
+          hookName: "PreToolUse:Bash",
+          command: "~/.claude/hooks/rtk-rewrite.sh",
+        },
+        timestamp: "2026-03-09T09:08:10Z",
+      },
+      {
+        type: "progress",
+        data: {
+          type: "hook_progress",
+          hookEvent: "PostToolUse",
+          hookName: "PostToolUse:Bash",
+          command: "~/.claude/hooks/post-bash.sh",
+        },
+        timestamp: "2026-03-09T09:08:11Z",
+      },
+      {
+        type: "assistant",
+        sessionId: "hook-session",
+        timestamp: "2026-03-09T09:08:12Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-6",
+          usage: { input_tokens: 100, output_tokens: 50 },
+          content: [
+            { type: "tool_use", id: "tu1", name: "Read", input: { file_path: "/tmp/a.ts" } },
+          ],
+        },
+      },
+    ]);
+
+    const result = await parseTranscript(path);
+    expect(result).not.toBeNull();
+    expect(result!.hookSummaries).toHaveLength(2);
+    expect(result!.hookSummaries).toContainEqual({
+      hookEvent: "PreToolUse",
+      hookName: "PreToolUse:Bash",
+      command: "~/.claude/hooks/rtk-rewrite.sh",
+      count: 1,
+    });
+    expect(result!.hookSummaries).toContainEqual({
+      hookEvent: "PostToolUse",
+      hookName: "PostToolUse:Bash",
+      command: "~/.claude/hooks/post-bash.sh",
+      count: 1,
+    });
+  });
+
+  test("T-002: hookSummaries is empty when no hook_progress entries", async () => {
+    const path = createJsonlFile([
+      {
+        type: "assistant",
+        sessionId: "no-hooks",
+        cwd: "/tmp",
+        timestamp: "2026-03-09T09:08:00Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-6",
+          usage: { input_tokens: 50, output_tokens: 20 },
+          content: [
+            { type: "tool_use", id: "tu1", name: "Read", input: { file_path: "/tmp/a.ts" } },
+          ],
+        },
+      },
+    ]);
+
+    const result = await parseTranscript(path);
+    expect(result).not.toBeNull();
+    expect(result!.hookSummaries).toEqual([]);
+  });
+
+  test("T-003: counts duplicate hook_progress as single entry with count", async () => {
+    const hookProgress = {
+      type: "progress",
+      data: {
+        type: "hook_progress",
+        hookEvent: "PreToolUse",
+        hookName: "PreToolUse:Bash",
+        command: "~/.claude/hooks/rtk-rewrite.sh",
+      },
+      timestamp: "2026-03-09T09:08:10Z",
+    };
+    const path = createJsonlFile([
+      {
+        type: "user",
+        sessionId: "hook-count",
+        cwd: "/tmp/project",
+        timestamp: "2026-03-09T09:08:00Z",
+        message: { role: "user", content: [{ type: "text", text: "hello" }] },
+      },
+      hookProgress,
+      hookProgress,
+      hookProgress,
+      hookProgress,
+      hookProgress,
+      {
+        type: "assistant",
+        sessionId: "hook-count",
+        timestamp: "2026-03-09T09:08:15Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-6",
+          usage: { input_tokens: 100, output_tokens: 50 },
+          content: [
+            { type: "tool_use", id: "tu1", name: "Read", input: { file_path: "/tmp/a.ts" } },
+          ],
+        },
+      },
+    ]);
+
+    const result = await parseTranscript(path);
+    expect(result).not.toBeNull();
+    expect(result!.hookSummaries).toHaveLength(1);
+    expect(result!.hookSummaries[0]).toEqual({
+      hookEvent: "PreToolUse",
+      hookName: "PreToolUse:Bash",
+      command: "~/.claude/hooks/rtk-rewrite.sh",
+      count: 5,
+    });
+  });
+
   test("skips malformed lines gracefully", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kagami-test-"));
     const path = join(dir, "session.jsonl");
