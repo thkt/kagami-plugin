@@ -139,6 +139,7 @@ async function parseTranscript(filePath) {
   let currentModel = "";
   let userMessages = 0;
   let assistantMessages = 0;
+  const hookCounts = new Map;
   const rl = createInterface({
     input: createReadStream(filePath),
     crlfDelay: Number.POSITIVE_INFINITY
@@ -162,6 +163,18 @@ async function parseTranscript(filePath) {
       if (!firstTimestamp)
         firstTimestamp = line.timestamp;
       lastTimestamp = line.timestamp;
+    }
+    if (line.type === "progress" && line.data?.type === "hook_progress") {
+      const { hookEvent, hookName, command } = line.data;
+      if (hookEvent && hookName && command) {
+        const key = `${hookEvent}|${hookName}|${command}`;
+        const existing = hookCounts.get(key);
+        if (existing) {
+          existing.count++;
+        } else {
+          hookCounts.set(key, { hookEvent, hookName, command, count: 1 });
+        }
+      }
     }
     if (line.type === "user" && !line.isMeta)
       userMessages++;
@@ -261,6 +274,7 @@ async function parseTranscript(filePath) {
     sessionStartedAt: firstTimestamp,
     sessionEndedAt: lastTimestamp,
     events: truncated,
+    hookSummaries: [...hookCounts.values()],
     tokenSummary: {
       byModel,
       totalEstimatedCostUsd: totalCost
