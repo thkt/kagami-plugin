@@ -7,9 +7,8 @@ set -euo pipefail
 HOOK_INPUT=$(cat)
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Run node in background, detached from session
-# timeout 10s to ensure we don't block (hooks.json also has timeout: 10000)
-node "$PLUGIN_ROOT/dist/stop-hook.js" <<< "$HOOK_INPUT" &
+# Run node in background, detach stdout/stderr so Claude Code's pipe closes immediately
+node "$PLUGIN_ROOT/dist/stop-hook.js" <<< "$HOOK_INPUT" >/dev/null 2>&1 &
 
 # Exit immediately - don't wait for background process
 exit 0
