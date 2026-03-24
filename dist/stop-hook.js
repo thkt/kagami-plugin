@@ -1,10 +1,6 @@
 import { createRequire } from "node:module";
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
-// src/stop-hook.ts
-import { execFile as execFile2 } from "node:child_process";
-import { promisify as promisify2 } from "node:util";
-
 // src/signing.ts
 import {
   generateKeyPairSync,
@@ -44,7 +40,8 @@ function signPayload(body, privateKeyPem) {
 }
 
 // src/api.ts
-function sendPayload(apiUrl, apiKey, payload, timeoutMs, signingKeyDir) {
+function sendPayload(options) {
+  const { apiUrl, apiKey, payload, timeoutMs, signingKeyDir } = options;
   const body = JSON.stringify(payload);
   const headers = {
     "Content-Type": "application/json"
@@ -68,11 +65,9 @@ function sendPayload(apiUrl, apiKey, payload, timeoutMs, signingKeyDir) {
 
 // src/parser.ts
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { basename } from "node:path";
 import { createInterface } from "node:readline";
-import { promisify } from "node:util";
 
 // src/cost.ts
 var PRICING = {
@@ -91,8 +86,35 @@ function estimateCost(model, tokens) {
   return tokens.inputTokens * pricing.input / perMillion + tokens.outputTokens * pricing.output / perMillion + tokens.cacheCreationTokens * pricing.cacheWrite / perMillion + tokens.cacheReadTokens * pricing.cacheRead / perMillion;
 }
 
-// src/parser.ts
+// src/shared.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+// src/stdin.ts
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+// src/shared.ts
 var execFileAsync = promisify(execFile);
+async function resolveCcVersion() {
+  try {
+    const { stdout } = await execFileAsync("claude", ["--version"]);
+    return stdout.trim();
+  } catch {
+    return "unknown";
+  }
+}
+async function parseStdinJson() {
+  const raw = await readStdin();
+  return JSON.parse(raw);
+}
+
+// src/parser.ts
 var BUILTIN_TOOLS = new Set([
   "Read",
   "Write",
@@ -398,48 +420,44 @@ async function appendSentId(sessionId) {
   } catch {}
 }
 
-// src/stdin.ts
-async function readStdin() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks).toString("utf-8");
-}
-
 // src/stop-hook.ts
-var execFileAsync2 = promisify2(execFile2);
-var API_URL = process.env.KAGAMI_API_URL ?? "";
-var API_KEY = process.env.KAGAMI_API_KEY;
-if (!API_URL)
-  process.exit(0);
 async function main() {
-  const raw = await readStdin();
+  const API_URL = process.env.KAGAMI_API_URL ?? "";
+  const API_KEY = process.env.KAGAMI_API_KEY;
+  if (!API_URL)
+    process.exit(0);
   let input;
   try {
-    input = JSON.parse(raw);
+    input = await parseStdinJson();
   } catch {
     process.exit(0);
   }
   if (!input.transcript_path) {
     process.exit(0);
   }
-  const payload = await parseTranscript(input.transcript_path);
+  let payload;
+  try {
+    payload = await parseTranscript(input.transcript_path);
+  } catch {
+    process.exit(0);
+  }
   if (!payload) {
     await appendSentId(input.session_id);
     process.exit(0);
   }
-  try {
-    const { stdout } = await execFileAsync2("claude", ["--version"]);
-    payload.ccVersion = stdout.trim();
-  } catch {
-    payload.ccVersion = "unknown";
-  }
+  payload.ccVersion = await resolveCcVersion();
   payload.source = "stop";
   try {
-    const res = await sendPayload(API_URL, API_KEY, payload, 8000, SIGNING_KEY_DIR);
+    const res = await sendPayload({
+      apiUrl: API_URL,
+      apiKey: API_KEY,
+      payload,
+      timeoutMs: 8000,
+      signingKeyDir: SIGNING_KEY_DIR
+    });
     if (res.ok)
       await appendSentId(input.session_id);
   } catch {}
 }
-main();
+if (__require.main == __require.module)
+  main();

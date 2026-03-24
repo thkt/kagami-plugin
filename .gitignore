@@ -1,3 +1,6 @@
 node_modules/
 *.log
 .DS_Store
+
+# Override global gitignore — dist/ is the published plugin output
+!dist/

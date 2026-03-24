@@ -2,11 +2,9 @@ import { createRequire } from "node:module";
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // src/startup-send.ts
-import { execFile as execFile2 } from "node:child_process";
 import { readdir, stat } from "node:fs/promises";
 import { homedir as homedir3 } from "node:os";
 import { join as join3, resolve } from "node:path";
-import { promisify as promisify2 } from "node:util";
 
 // src/signing.ts
 import {
@@ -47,7 +45,8 @@ function signPayload(body, privateKeyPem) {
 }
 
 // src/api.ts
-function sendPayload(apiUrl, apiKey, payload, timeoutMs, signingKeyDir) {
+function sendPayload(options) {
+  const { apiUrl, apiKey, payload, timeoutMs, signingKeyDir } = options;
   const body = JSON.stringify(payload);
   const headers = {
     "Content-Type": "application/json"
@@ -71,11 +70,9 @@ function sendPayload(apiUrl, apiKey, payload, timeoutMs, signingKeyDir) {
 
 // src/parser.ts
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { basename } from "node:path";
 import { createInterface } from "node:readline";
-import { promisify } from "node:util";
 
 // src/cost.ts
 var PRICING = {
@@ -94,8 +91,35 @@ function estimateCost(model, tokens) {
   return tokens.inputTokens * pricing.input / perMillion + tokens.outputTokens * pricing.output / perMillion + tokens.cacheCreationTokens * pricing.cacheWrite / perMillion + tokens.cacheReadTokens * pricing.cacheRead / perMillion;
 }
 
-// src/parser.ts
+// src/shared.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+// src/stdin.ts
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+// src/shared.ts
 var execFileAsync = promisify(execFile);
+async function resolveCcVersion() {
+  try {
+    const { stdout } = await execFileAsync("claude", ["--version"]);
+    return stdout.trim();
+  } catch {
+    return "unknown";
+  }
+}
+async function parseStdinJson() {
+  const raw = await readStdin();
+  return JSON.parse(raw);
+}
+
+// src/parser.ts
 var BUILTIN_TOOLS = new Set([
   "Read",
   "Write",
@@ -401,18 +425,8 @@ async function appendSentId(sessionId) {
   } catch {}
 }
 
-// src/stdin.ts
-async function readStdin() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks).toString("utf-8");
-}
-
 // src/startup-send.ts
 var STARTUP_DELAY_MS = 30000;
-var execFileAsync2 = promisify2(execFile2);
 var MAX_AGE_MS = 48 * 60 * 60 * 1000;
 async function findRecentJsonlFiles(dir, currentTranscript) {
   const now = Date.now();
@@ -441,10 +455,9 @@ async function main() {
   const API_KEY = process.env.KAGAMI_API_KEY;
   if (!API_URL)
     process.exit(0);
-  const raw = await readStdin();
   let input;
   try {
-    input = JSON.parse(raw);
+    input = await parseStdinJson();
   } catch {
     process.exit(0);
   }
@@ -455,21 +468,17 @@ async function main() {
   } catch {
     process.exit(0);
   }
-  const [_, files, sentIds] = await Promise.all([
+  const [_, files, sentIds, ccVersion] = await Promise.all([
     new Promise((r) => setTimeout(r, STARTUP_DELAY_MS)),
     findRecentJsonlFiles(projectsDir, currentTranscript),
-    loadSentIds()
+    loadSentIds(),
+    resolveCcVersion()
   ]);
   if (files.length === 0)
     process.exit(0);
   const unsent = files.filter((file) => !sentIds.has(sessionIdFromPath(file)));
   if (unsent.length === 0)
     process.exit(0);
-  let ccVersion = "unknown";
-  try {
-    const { stdout } = await execFileAsync2("claude", ["--version"]);
-    ccVersion = stdout.trim();
-  } catch {}
   const results = await Promise.allSettled(unsent.map(async (file) => {
     const sessionId = sessionIdFromPath(file);
     const payload = await parseTranscript(file);
@@ -479,7 +488,13 @@ async function main() {
     }
     payload.ccVersion = ccVersion;
     payload.source = "startup-send";
-    const res = await sendPayload(API_URL, API_KEY, payload, 8000, SIGNING_KEY_DIR);
+    const res = await sendPayload({
+      apiUrl: API_URL,
+      apiKey: API_KEY,
+      payload,
+      timeoutMs: 8000,
+      signingKeyDir: SIGNING_KEY_DIR
+    });
     if (res.ok)
       await appendSentId(sessionId);
   }));

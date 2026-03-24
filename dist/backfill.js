@@ -45,7 +45,8 @@ function signPayload(body, privateKeyPem) {
 }
 
 // src/api.ts
-function sendPayload(apiUrl, apiKey, payload, timeoutMs, signingKeyDir) {
+function sendPayload(options) {
+  const { apiUrl, apiKey, payload, timeoutMs, signingKeyDir } = options;
   const body = JSON.stringify(payload);
   const headers = {
     "Content-Type": "application/json"
@@ -69,11 +70,9 @@ function sendPayload(apiUrl, apiKey, payload, timeoutMs, signingKeyDir) {
 
 // src/parser.ts
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { basename } from "node:path";
 import { createInterface } from "node:readline";
-import { promisify } from "node:util";
 
 // src/cost.ts
 var PRICING = {
@@ -92,8 +91,35 @@ function estimateCost(model, tokens) {
   return tokens.inputTokens * pricing.input / perMillion + tokens.outputTokens * pricing.output / perMillion + tokens.cacheCreationTokens * pricing.cacheWrite / perMillion + tokens.cacheReadTokens * pricing.cacheRead / perMillion;
 }
 
-// src/parser.ts
+// src/shared.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+// src/stdin.ts
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+// src/shared.ts
 var execFileAsync = promisify(execFile);
+async function resolveCcVersion() {
+  try {
+    const { stdout } = await execFileAsync("claude", ["--version"]);
+    return stdout.trim();
+  } catch {
+    return "unknown";
+  }
+}
+async function parseStdinJson() {
+  const raw = await readStdin();
+  return JSON.parse(raw);
+}
+
+// src/parser.ts
 var BUILTIN_TOOLS = new Set([
   "Read",
   "Write",
@@ -455,7 +481,13 @@ async function main() {
         success++;
         continue;
       }
-      const res = await sendPayload(API_URL, API_KEY, payload, 30000, SIGNING_KEY_DIR);
+      const res = await sendPayload({
+        apiUrl: API_URL,
+        apiKey: API_KEY,
+        payload,
+        timeoutMs: 30000,
+        signingKeyDir: SIGNING_KEY_DIR
+      });
       if (res.ok) {
         await appendSentId(sessionIdFromPath(file));
         console.log(`sent (${payload.events.length} events)`);
