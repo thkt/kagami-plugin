@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { basename } from "node:path";
 import { createInterface } from "node:readline";
-import { promisify } from "node:util";
 import { estimateCost } from "./cost";
+import { execFileAsync } from "./shared";
 import type {
   ContentBlock,
   EventPayload,
@@ -13,8 +12,6 @@ import type {
   ToolEventInput,
   TranscriptLine,
 } from "./types";
-
-const execFileAsync = promisify(execFile);
 
 /**
  * Claude Code ビルトインツール一覧

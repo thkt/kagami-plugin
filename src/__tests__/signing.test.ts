@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -36,6 +36,35 @@ describe("ensureKeyPair", () => {
       const second = ensureKeyPair(dir);
       expect(second.publicKey).toBe(first.publicKey);
       expect(second.privateKey).toBe(first.privateKey);
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  test("regenerates both keys when only private key exists", () => {
+    const dir = makeTmpDir();
+    try {
+      writeFileSync(join(dir, "signing_key.pem"), "stale-private-key");
+      const { publicKey, privateKey } = ensureKeyPair(dir);
+      expect(publicKey).toContain("PUBLIC KEY");
+      expect(privateKey).toContain("PRIVATE KEY");
+      // verify the new pair works together
+      const sig = signPayload("{}", privateKey);
+      expect(verifyPayload("{}", sig, publicKey)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  test("regenerates both keys when only public key exists", () => {
+    const dir = makeTmpDir();
+    try {
+      writeFileSync(join(dir, "signing_pub.pem"), "stale-public-key");
+      const { publicKey, privateKey } = ensureKeyPair(dir);
+      expect(publicKey).toContain("PUBLIC KEY");
+      expect(privateKey).toContain("PRIVATE KEY");
+      const sig = signPayload("{}", privateKey);
+      expect(verifyPayload("{}", sig, publicKey)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true });
     }
@@ -96,5 +125,13 @@ describe("signPayload / verifyPayload", () => {
     } finally {
       rmSync(dir, { recursive: true });
     }
+  });
+
+  test("signPayload throws on invalid PEM", () => {
+    expect(() => signPayload("{}", "not-a-pem")).toThrow();
+  });
+
+  test("verifyPayload throws on invalid PEM", () => {
+    expect(() => verifyPayload("{}", "c2ln", "not-a-pem")).toThrow();
   });
 });

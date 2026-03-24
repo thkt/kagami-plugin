@@ -1,13 +1,16 @@
 import type { EventPayload } from "./types";
 import { ensureKeyPair, signPayload } from "./signing";
 
-export function sendPayload(
-  apiUrl: string,
-  apiKey: string | undefined,
-  payload: EventPayload,
-  timeoutMs?: number,
-  signingKeyDir?: string,
-): Promise<Response> {
+export interface SendOptions {
+  apiUrl: string;
+  apiKey?: string;
+  payload: EventPayload;
+  timeoutMs?: number;
+  signingKeyDir?: string;
+}
+
+export function sendPayload(options: SendOptions): Promise<Response> {
+  const { apiUrl, apiKey, payload, timeoutMs, signingKeyDir } = options;
   const body = JSON.stringify(payload);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",

@@ -34,10 +34,10 @@ afterEach(() => {
   captured = null;
 });
 
-function stubFetch() {
+function stubFetch(status = 200) {
   globalThis.fetch = (async (url: string, init: RequestInit) => {
     captured = { url, init };
-    return new Response("{}", { status: 200 });
+    return new Response("{}", { status });
   }) as typeof fetch;
 }
 
@@ -47,9 +47,13 @@ describe("sendPayload", () => {
     try {
       stubFetch();
       const { sendPayload } = await import("../api");
-      const payload = makePayload();
 
-      await sendPayload("http://localhost", "key", payload, undefined, dir);
+      await sendPayload({
+        apiUrl: "http://localhost",
+        apiKey: "key",
+        payload: makePayload(),
+        signingKeyDir: dir,
+      });
 
       expect(captured).not.toBeNull();
       const headers = captured!.init.headers as Record<string, string>;
@@ -66,7 +70,12 @@ describe("sendPayload", () => {
       const { sendPayload } = await import("../api");
       const payload = makePayload();
 
-      await sendPayload("http://localhost", "key", payload, undefined, dir);
+      await sendPayload({
+        apiUrl: "http://localhost",
+        apiKey: "key",
+        payload,
+        signingKeyDir: dir,
+      });
 
       const body = captured!.init.body as string;
       const headers = captured!.init.headers as Record<string, string>;
@@ -79,12 +88,15 @@ describe("sendPayload", () => {
     }
   });
 
-  test("still sends when signingKeyDir is omitted (backward compat)", async () => {
+  test("still sends when signingKeyDir is omitted", async () => {
     stubFetch();
     const { sendPayload } = await import("../api");
-    const payload = makePayload();
 
-    await sendPayload("http://localhost", "key", payload);
+    await sendPayload({
+      apiUrl: "http://localhost",
+      apiKey: "key",
+      payload: makePayload(),
+    });
 
     expect(captured).not.toBeNull();
     expect(captured!.url).toBe("http://localhost/api/events");
@@ -96,7 +108,12 @@ describe("sendPayload", () => {
       stubFetch();
       const { sendPayload } = await import("../api");
 
-      await sendPayload("http://localhost", "my-key", makePayload(), undefined, dir);
+      await sendPayload({
+        apiUrl: "http://localhost",
+        apiKey: "my-key",
+        payload: makePayload(),
+        signingKeyDir: dir,
+      });
 
       const headers = captured!.init.headers as Record<string, string>;
       expect(headers.Authorization).toBe("Bearer my-key");
@@ -108,9 +125,13 @@ describe("sendPayload", () => {
   test("sends without signature when signing fails (graceful degradation)", async () => {
     stubFetch();
     const { sendPayload } = await import("../api");
-    const payload = makePayload();
 
-    await sendPayload("http://localhost", "key", payload, undefined, "/dev/null/impossible");
+    await sendPayload({
+      apiUrl: "http://localhost",
+      apiKey: "key",
+      payload: makePayload(),
+      signingKeyDir: "/dev/null/impossible",
+    });
 
     expect(captured).not.toBeNull();
     const headers = captured!.init.headers as Record<string, string>;
@@ -124,7 +145,12 @@ describe("sendPayload", () => {
       stubFetch();
       const { sendPayload } = await import("../api");
 
-      await sendPayload("http://localhost", "key", makePayload(), undefined, dir);
+      await sendPayload({
+        apiUrl: "http://localhost",
+        apiKey: "key",
+        payload: makePayload(),
+        signingKeyDir: dir,
+      });
 
       const headers = captured!.init.headers as Record<string, string>;
       const publicKeyHeader = headers["X-Kagami-Public-Key"];
@@ -140,7 +166,11 @@ describe("sendPayload", () => {
     stubFetch();
     const { sendPayload } = await import("../api");
 
-    await sendPayload("http://localhost", "key", makePayload());
+    await sendPayload({
+      apiUrl: "http://localhost",
+      apiKey: "key",
+      payload: makePayload(),
+    });
 
     const headers = captured!.init.headers as Record<string, string>;
     expect(headers["X-Kagami-Public-Key"]).toBeUndefined();
@@ -150,9 +180,65 @@ describe("sendPayload", () => {
     stubFetch();
     const { sendPayload } = await import("../api");
 
-    await sendPayload("http://localhost", undefined, makePayload());
+    await sendPayload({
+      apiUrl: "http://localhost",
+      payload: makePayload(),
+    });
 
     const headers = captured!.init.headers as Record<string, string>;
     expect(headers.Authorization).toBeUndefined();
+  });
+
+  test("passes AbortSignal when timeoutMs is provided", async () => {
+    stubFetch();
+    const { sendPayload } = await import("../api");
+
+    await sendPayload({
+      apiUrl: "http://localhost",
+      payload: makePayload(),
+      timeoutMs: 5000,
+    });
+
+    expect(captured).not.toBeNull();
+    expect(captured!.init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  test("does not pass AbortSignal when timeoutMs is omitted", async () => {
+    stubFetch();
+    const { sendPayload } = await import("../api");
+
+    await sendPayload({
+      apiUrl: "http://localhost",
+      payload: makePayload(),
+    });
+
+    expect(captured).not.toBeNull();
+    expect(captured!.init.signal).toBeUndefined();
+  });
+
+  test("propagates fetch rejection on network error", async () => {
+    globalThis.fetch = (() =>
+      Promise.reject(new Error("network failure"))) as unknown as typeof fetch;
+    const { sendPayload } = await import("../api");
+
+    await expect(
+      sendPayload({
+        apiUrl: "http://localhost",
+        payload: makePayload(),
+      }),
+    ).rejects.toThrow("network failure");
+  });
+
+  test("returns non-OK response without throwing", async () => {
+    stubFetch(500);
+    const { sendPayload } = await import("../api");
+
+    const res = await sendPayload({
+      apiUrl: "http://localhost",
+      payload: makePayload(),
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe(500);
   });
 });

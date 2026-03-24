@@ -89,7 +89,13 @@ async function main() {
         continue;
       }
 
-      const res = await sendPayload(API_URL!, API_KEY, payload, 30_000, SIGNING_KEY_DIR);
+      const res = await sendPayload({
+        apiUrl: API_URL!,
+        apiKey: API_KEY,
+        payload,
+        timeoutMs: 30_000,
+        signingKeyDir: SIGNING_KEY_DIR,
+      });
 
       if (res.ok) {
         await appendSentId(sessionIdFromPath(file));

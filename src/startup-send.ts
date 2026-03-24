@@ -5,20 +5,16 @@
  * Stop hook で送れなかったセッション（ターミナル閉じ等）の回収が目的。
  * サーバー側で sessionId の重複排除を行う前提。
  */
-import { execFile } from "node:child_process";
 import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { promisify } from "node:util";
 import { sendPayload } from "./api";
 import { parseTranscript } from "./parser";
 import { appendSentId, loadSentIds, sessionIdFromPath } from "./sent";
+import { parseStdinJson, resolveCcVersion } from "./shared";
 import { SIGNING_KEY_DIR } from "./signing";
-import { readStdin } from "./stdin";
 
 const STARTUP_DELAY_MS = 30_000;
-
-const execFileAsync = promisify(execFile);
 
 interface SessionStartInput {
   session_id: string;
@@ -65,10 +61,9 @@ async function main() {
   const API_KEY = process.env.KAGAMI_API_KEY;
   if (!API_URL) process.exit(0);
 
-  const raw = await readStdin();
   let input: SessionStartInput;
   try {
-    input = JSON.parse(raw);
+    input = await parseStdinJson<SessionStartInput>();
   } catch {
     process.exit(0);
   }
@@ -83,21 +78,16 @@ async function main() {
   }
 
   // Claude Code 起動直後の CPU 競合を回避しつつ、I/O は並行で先行開始
-  const [_, files, sentIds] = await Promise.all([
+  const [_, files, sentIds, ccVersion] = await Promise.all([
     new Promise((r) => setTimeout(r, STARTUP_DELAY_MS)),
     findRecentJsonlFiles(projectsDir, currentTranscript),
     loadSentIds(),
+    resolveCcVersion(),
   ]);
   if (files.length === 0) process.exit(0);
 
   const unsent = files.filter((file) => !sentIds.has(sessionIdFromPath(file)));
   if (unsent.length === 0) process.exit(0);
-
-  let ccVersion = "unknown";
-  try {
-    const { stdout } = await execFileAsync("claude", ["--version"]);
-    ccVersion = stdout.trim();
-  } catch {}
 
   const results = await Promise.allSettled(
     unsent.map(async (file) => {
@@ -109,7 +99,13 @@ async function main() {
       }
       payload.ccVersion = ccVersion;
       payload.source = "startup-send";
-      const res = await sendPayload(API_URL, API_KEY, payload, 8000, SIGNING_KEY_DIR);
+      const res = await sendPayload({
+        apiUrl: API_URL,
+        apiKey: API_KEY,
+        payload,
+        timeoutMs: 8000,
+        signingKeyDir: SIGNING_KEY_DIR,
+      });
       if (res.ok) await appendSentId(sessionId);
     }),
   );
