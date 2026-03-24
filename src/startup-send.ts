@@ -13,6 +13,7 @@ import { promisify } from "node:util";
 import { sendPayload } from "./api";
 import { parseTranscript } from "./parser";
 import { appendSentId, loadSentIds, sessionIdFromPath } from "./sent";
+import { SIGNING_KEY_DIR } from "./signing";
 import { readStdin } from "./stdin";
 
 const STARTUP_DELAY_MS = 30_000;
@@ -108,7 +109,7 @@ async function main() {
       }
       payload.ccVersion = ccVersion;
       payload.source = "startup-send";
-      const res = await sendPayload(API_URL, API_KEY, payload, 8000);
+      const res = await sendPayload(API_URL, API_KEY, payload, 8000, SIGNING_KEY_DIR);
       if (res.ok) await appendSentId(sessionId);
     }),
   );

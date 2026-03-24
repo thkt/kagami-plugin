@@ -4,21 +4,67 @@ var __require = /* @__PURE__ */ createRequire(import.meta.url);
 // src/startup-send.ts
 import { execFile as execFile2 } from "node:child_process";
 import { readdir, stat } from "node:fs/promises";
-import { homedir as homedir2 } from "node:os";
-import { join as join2, resolve } from "node:path";
+import { homedir as homedir3 } from "node:os";
+import { join as join3, resolve } from "node:path";
 import { promisify as promisify2 } from "node:util";
 
+// src/signing.ts
+import {
+  generateKeyPairSync,
+  sign,
+  verify,
+  createPublicKey,
+  createPrivateKey
+} from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+var SIGNING_KEY_DIR = join(homedir(), ".claude", "plugins", "kagami");
+var PRIV_FILE = "signing_key.pem";
+var PUB_FILE = "signing_pub.pem";
+function ensureKeyPair(dir) {
+  const privPath = join(dir, PRIV_FILE);
+  const pubPath = join(dir, PUB_FILE);
+  if (existsSync(privPath) && existsSync(pubPath)) {
+    return {
+      privateKey: readFileSync(privPath, "utf8"),
+      publicKey: readFileSync(pubPath, "utf8")
+    };
+  }
+  mkdirSync(dir, { recursive: true });
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519", {
+    publicKeyEncoding: { type: "spki", format: "pem" },
+    privateKeyEncoding: { type: "pkcs8", format: "pem" }
+  });
+  writeFileSync(privPath, privateKey, { mode: 384 });
+  writeFileSync(pubPath, publicKey);
+  return { publicKey, privateKey };
+}
+function signPayload(body, privateKeyPem) {
+  const key = createPrivateKey(privateKeyPem);
+  const sig = sign(null, Buffer.from(body), key);
+  return sig.toString("base64");
+}
+
 // src/api.ts
-function sendPayload(apiUrl, apiKey, payload, timeoutMs) {
+function sendPayload(apiUrl, apiKey, payload, timeoutMs, signingKeyDir) {
+  const body = JSON.stringify(payload);
   const headers = {
     "Content-Type": "application/json"
   };
   if (apiKey)
     headers.Authorization = `Bearer ${apiKey}`;
+  if (signingKeyDir) {
+    try {
+      const { publicKey, privateKey } = ensureKeyPair(signingKeyDir);
+      headers["X-Kagami-Signature"] = signPayload(body, privateKey);
+      headers["X-Kagami-Public-Key"] = Buffer.from(publicKey).toString("base64");
+    } catch {}
+  }
   return fetch(`${apiUrl}/api/events`, {
     method: "POST",
     headers,
-    body: JSON.stringify(payload),
+    body,
     signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined
   });
 }
@@ -325,9 +371,9 @@ function truncateEvents(events, max) {
 
 // src/sent.ts
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename as basename2, dirname, join } from "node:path";
-var SENT_FILE = join(homedir(), ".claude", "plugins", "kagami", "sent.txt");
+import { homedir as homedir2 } from "node:os";
+import { basename as basename2, dirname, join as join2 } from "node:path";
+var SENT_FILE = join2(homedir2(), ".claude", "plugins", "kagami", "sent.txt");
 var MAX_ENTRIES = 1e4;
 async function loadSentIds() {
   try {
@@ -378,7 +424,7 @@ async function findRecentJsonlFiles(dir, currentTranscript) {
     return [];
   }
   const checks = await Promise.all(entries.filter((e) => !e.isDirectory() && e.name.endsWith(".jsonl")).map(async (entry) => {
-    const fullPath = join2(entry.parentPath, entry.name);
+    const fullPath = join3(entry.parentPath, entry.name);
     if (resolve(fullPath) === resolved)
       return null;
     try {
@@ -403,7 +449,7 @@ async function main() {
     process.exit(0);
   }
   const currentTranscript = input.transcript_path ?? "";
-  const projectsDir = join2(homedir2(), ".claude", "projects");
+  const projectsDir = join3(homedir3(), ".claude", "projects");
   try {
     await stat(projectsDir);
   } catch {
@@ -433,7 +479,7 @@ async function main() {
     }
     payload.ccVersion = ccVersion;
     payload.source = "startup-send";
-    const res = await sendPayload(API_URL, API_KEY, payload, 8000);
+    const res = await sendPayload(API_URL, API_KEY, payload, 8000, SIGNING_KEY_DIR);
     if (res.ok)
       await appendSentId(sessionId);
   }));

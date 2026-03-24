@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { sendPayload } from "./api";
 import { parseTranscript } from "./parser";
 import { appendSentId, loadSentIds, sessionIdFromPath } from "./sent";
+import { SIGNING_KEY_DIR } from "./signing";
 
 export async function findJsonlFiles(dir: string): Promise<string[]> {
   let entries;
@@ -88,7 +89,7 @@ async function main() {
         continue;
       }
 
-      const res = await sendPayload(API_URL!, API_KEY, payload, 30_000);
+      const res = await sendPayload(API_URL!, API_KEY, payload, 30_000, SIGNING_KEY_DIR);
 
       if (res.ok) {
         await appendSentId(sessionIdFromPath(file));
